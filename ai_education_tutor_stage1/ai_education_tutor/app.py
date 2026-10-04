@@ -308,6 +308,10 @@ if st.button(
     use_container_width=True,
 ):
 
+    # -----------------------------------------------------
+    # CHECK QUESTION
+    # -----------------------------------------------------
+
     if not question.strip():
 
         st.warning(
@@ -316,47 +320,115 @@ if st.button(
 
         st.stop()
 
+
+    # -----------------------------------------------------
+    # CHECK RAG KNOWLEDGE BASE
+    # -----------------------------------------------------
+
+    if not st.session_state.rag_ready:
+
+        st.warning(
+            "⚠️ Please upload a study PDF before "
+            "asking a document-based question."
+        )
+
+        st.stop()
+
+
     # -----------------------------------------------------
     # RAG SEARCH
     # -----------------------------------------------------
 
-    retrieved_context = ""
-
-    if st.session_state.rag_ready:
+    with st.spinner(
+        "🔎 Searching your study material..."
+    ):
 
         try:
 
             results = search_knowledge_base(
-                query=question,
+                query=question.strip(),
                 embedding_model=(
                     st.session_state.embedding_model
                 ),
-                index=st.session_state.rag_index,
-                chunks=(
-                    st.session_state.document_chunks
+                knowledge_base=(
+                    st.session_state.rag_index
                 ),
                 top_k=4,
             )
 
-            retrieved_context = "\n\n".join(
-                [
-                    result["text"]
-                    for result in results
-                ]
-            )
-
         except Exception as error:
 
-            st.warning(
-                "⚠️ RAG search failed. "
-                "The AI will answer without "
-                "document context."
+            st.error(
+                "❌ RAG search failed."
             )
 
             with st.expander(
                 "RAG technical details"
             ):
+
                 st.code(str(error))
+
+            st.stop()
+
+
+    # -----------------------------------------------------
+    # RELEVANCE CHECK
+    # -----------------------------------------------------
+
+    if not results:
+
+        st.warning(
+            "⚠️ I couldn't find enough relevant "
+            "information in the uploaded study material "
+            "to answer this question confidently."
+        )
+
+        st.info(
+            "Please ask a question related to the "
+            "uploaded PDF or upload a more relevant "
+            "study document."
+        )
+
+        st.stop()
+
+
+    # -----------------------------------------------------
+    # CREATE RETRIEVED CONTEXT
+    # -----------------------------------------------------
+
+    retrieved_context = "\n\n".join(
+        result["text"]
+        for result in results
+    )
+
+
+    # -----------------------------------------------------
+    # OPTIONAL: SHOW RAG INFORMATION
+    # -----------------------------------------------------
+
+    with st.expander(
+        "🔎 Retrieved Study Material"
+    ):
+
+        for number, result in enumerate(
+            results,
+            start=1,
+        ):
+
+            st.markdown(
+                f"**Source Chunk {number}**"
+            )
+
+            st.write(
+                result["text"]
+            )
+
+            st.caption(
+                f"Relevance Score: "
+                f"{result['score']:.3f}"
+            )
+
+            st.divider()
 
 
     # -----------------------------------------------------
@@ -384,7 +456,7 @@ if st.button(
     # -----------------------------------------------------
 
     with st.spinner(
-        "🤔 AI Tutor is preparing your answer..."
+        "🤔 Tutor → Research → Evaluation..."
     ):
 
         try:
@@ -395,13 +467,19 @@ if st.button(
                 model=model,
             )
 
+            # -------------------------------------------------
+            # FINAL ANSWER
+            # -------------------------------------------------
+
             if answer:
 
                 st.subheader(
                     "📖 AI Tutor Answer"
                 )
 
-                st.markdown(answer)
+                st.markdown(
+                    answer
+                )
 
             else:
 
@@ -419,8 +497,9 @@ if st.button(
                 "Technical error"
             ):
 
-                st.code(str(error))
-
+                st.code(
+                    str(error)
+                )
 
 # =========================================================
 # FOOTER
