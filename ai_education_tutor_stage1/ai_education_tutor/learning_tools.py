@@ -72,9 +72,6 @@ def extract_json_from_response(text):
 
 
 def validate_quiz(quiz_data):
-    """
-    Validate the quiz structure before displaying it.
-    """
 
     if not isinstance(quiz_data, dict):
         raise ValueError(
@@ -137,13 +134,12 @@ def validate_quiz(quiz_data):
                 f"Question {index} has an invalid answer index."
             )
 
+        # Explanation is optional.
+        # The quiz must NOT fail just because the AI omitted it.
         if not question.get("explanation"):
-            raise ValueError(
-                f"Question {index} has no explanation."
-            )
+            question["explanation"] = ""
 
     return True
-
 
 def initialize_quiz_state():
 
