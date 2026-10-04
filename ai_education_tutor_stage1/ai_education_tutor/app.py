@@ -7,7 +7,7 @@ from config import (
     AVAILABLE_MODELS,
 )
 
-from ai_engine import run_ai_tutor
+from rag/ai_engine import run_ai_tutor
 
 from document_processor import (
     extract_text_from_pdf,
