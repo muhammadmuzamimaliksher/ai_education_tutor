@@ -3,7 +3,6 @@ import streamlit as st
 from config import (
     APP_TITLE,
     GROQ_API_KEY,
-    DEFAULT_MODEL,
     AVAILABLE_MODELS,
 )
 
@@ -19,7 +18,10 @@ from rag_engine import (
     get_best_relevance_score,
 )
 
-from ai_engine import run_ai_tutor
+from ai_engine import (
+    run_ai_tutor,
+    run_learning_tool,
+)
 
 
 # =========================================================
@@ -30,18 +32,6 @@ st.set_page_config(
     page_title=APP_TITLE,
     page_icon="🎓",
     layout="wide",
-)
-
-
-# =========================================================
-# TITLE
-# =========================================================
-
-st.title("🎓 AI Education / AI Tutor")
-
-st.write(
-    "Learn from your study material or ask the AI Tutor "
-    "general educational questions."
 )
 
 
@@ -64,6 +54,30 @@ if "embedding_model" not in st.session_state:
 if "uploaded_file_name" not in st.session_state:
     st.session_state.uploaded_file_name = ""
 
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+if "last_question" not in st.session_state:
+    st.session_state.last_question = ""
+
+if "last_answer" not in st.session_state:
+    st.session_state.last_answer = ""
+
+if "last_context" not in st.session_state:
+    st.session_state.last_context = ""
+
+
+# =========================================================
+# TITLE
+# =========================================================
+
+st.title("🎓 AI Education / AI Tutor")
+
+st.write(
+    "Learn from your study material or ask the AI Tutor "
+    "general educational questions."
+)
+
 
 # =========================================================
 # SIDEBAR
@@ -81,7 +95,6 @@ mode = st.sidebar.radio(
 )
 
 
-# Remove emoji for internal comparison
 if mode.startswith("📚"):
     selected_mode = "PDF Question Answering"
 else:
@@ -109,7 +122,7 @@ academic_level = st.sidebar.selectbox(
 
 subject = st.sidebar.text_input(
     "Subject",
-    placeholder="e.g. Physics, Computer Science",
+    placeholder="e.g. Physics",
 )
 
 
@@ -135,6 +148,38 @@ explanation_style = st.sidebar.selectbox(
 
 
 # =========================================================
+# CONVERSATION CONTROLS
+# =========================================================
+
+st.sidebar.divider()
+
+st.sidebar.subheader("💬 Conversation")
+
+if st.sidebar.button(
+    "🗑️ Clear Conversation",
+    use_container_width=True,
+):
+
+    st.session_state.messages = []
+
+    st.session_state.last_question = ""
+
+    st.session_state.last_answer = ""
+
+    st.session_state.last_context = ""
+
+    st.rerun()
+
+
+if st.session_state.messages:
+
+    st.sidebar.caption(
+        f"{len(st.session_state.messages)} "
+        "messages in current session."
+    )
+
+
+# =========================================================
 # PDF MODE
 # =========================================================
 
@@ -143,25 +188,30 @@ if selected_mode == "PDF Question Answering":
     st.header("📚 PDF Question Answering")
 
     st.info(
-        "Upload your study PDF. The AI will answer using "
-        "the retrieved information from your document."
+        "Upload a study PDF. The AI will answer using "
+        "relevant information retrieved from the document."
     )
+
+
+    # -----------------------------------------------------
+    # UPLOAD PDF
+    # -----------------------------------------------------
 
     uploaded_file = st.file_uploader(
         "Upload Study PDF",
         type=["pdf"],
     )
 
+
     if uploaded_file is not None:
 
-        # Process only when a new file is uploaded
         if (
             st.session_state.uploaded_file_name
             != uploaded_file.name
         ):
 
             with st.spinner(
-                "📄 Reading and processing PDF..."
+                "📄 Reading PDF..."
             ):
 
                 try:
@@ -177,13 +227,15 @@ if selected_mode == "PDF Question Answering":
                     )
 
                     if not chunks:
+
                         st.error(
-                            "❌ No usable text chunks were "
-                            "created from this PDF."
+                            "❌ No usable text was found."
                         )
 
                         st.session_state.rag_ready = False
+
                         st.stop()
+
 
                     with st.spinner(
                         "🧠 Creating document embeddings..."
@@ -199,6 +251,7 @@ if selected_mode == "PDF Question Answering":
                                 embedding_model,
                             )
                         )
+
 
                     st.session_state.embedding_model = (
                         embedding_model
@@ -218,9 +271,18 @@ if selected_mode == "PDF Question Answering":
                         uploaded_file.name
                     )
 
+                    # New document = new conversation
+                    st.session_state.messages = []
+
+                    st.session_state.last_question = ""
+
+                    st.session_state.last_answer = ""
+
+                    st.session_state.last_context = ""
+
                     st.success(
                         f"✅ PDF ready! "
-                        f"{len(chunks)} text chunks created."
+                        f"{len(chunks)} chunks created."
                     )
 
                 except Exception as error:
@@ -228,12 +290,13 @@ if selected_mode == "PDF Question Answering":
                     st.session_state.rag_ready = False
 
                     st.error(
-                        "❌ Could not process the PDF."
+                        "❌ Could not process PDF."
                     )
 
                     with st.expander(
                         "Technical error"
                     ):
+
                         st.code(str(error))
 
         else:
@@ -243,314 +306,794 @@ if selected_mode == "PDF Question Answering":
             )
 
 
-    # -----------------------------------------------------
-    # QUESTION
-    # -----------------------------------------------------
+# =========================================================
+# DISPLAY CHAT HISTORY
+# =========================================================
 
-    question = st.text_area(
-        "Ask a question about your PDF",
-        placeholder=(
-            "Example: Explain the main concept "
-            "discussed in Chapter 1."
-        ),
-        height=130,
+for message in st.session_state.messages:
+
+    with st.chat_message(
+        message["role"]
+    ):
+
+        st.markdown(
+            message["content"]
+        )
+
+
+# =========================================================
+# USER INPUT
+# =========================================================
+
+if selected_mode == "PDF Question Answering":
+
+    question = st.chat_input(
+        "Ask a question about your PDF..."
+    )
+
+else:
+
+    question = st.chat_input(
+        "Ask your AI Tutor anything..."
     )
 
 
-    # -----------------------------------------------------
-    # ASK BUTTON
-    # -----------------------------------------------------
+# =========================================================
+# PROCESS QUESTION
+# =========================================================
 
-    if st.button(
-        "🚀 Ask Question",
-        type="primary",
-        use_container_width=True,
-    ):
+if question:
 
-        if not question.strip():
+    question = question.strip()
 
-            st.warning(
-                "⚠️ Please enter a question."
-            )
 
-            st.stop()
+    if not question:
 
+        st.warning(
+            "⚠️ Please enter a question."
+        )
+
+        st.stop()
+
+
+    # =====================================================
+    # PDF MODE
+    # =====================================================
+
+    if selected_mode == "PDF Question Answering":
 
         if not st.session_state.rag_ready:
 
             st.warning(
-                "⚠️ Please upload and process a PDF first."
+                "⚠️ Please upload a PDF first."
             )
 
             st.stop()
 
 
         # -------------------------------------------------
-        # RAG SEARCH
+        # SHOW USER QUESTION
         # -------------------------------------------------
 
-        with st.spinner(
-            "🔎 Searching your study material..."
-        ):
+        st.session_state.messages.append(
+            {
+                "role": "user",
+                "content": question,
+            }
+        )
 
-            try:
 
-                results = search_knowledge_base(
-                    query=question.strip(),
-                    embedding_model=(
-                        st.session_state.embedding_model
-                    ),
-                    knowledge_base=(
-                        st.session_state.rag_index
-                    ),
-                    top_k=4,
-                )
+        with st.chat_message("user"):
 
-            except Exception as error:
+            st.markdown(question)
 
-                st.error(
-                    "❌ RAG search failed."
-                )
 
-                with st.expander(
-                    "Technical error"
-                ):
+        # -------------------------------------------------
+        # SEARCH RAG
+        # -------------------------------------------------
+
+        with st.chat_message("assistant"):
+
+            with st.spinner(
+                "🔎 Searching study material..."
+            ):
+
+                try:
+
+                    results = search_knowledge_base(
+                        query=question,
+                        embedding_model=(
+                            st.session_state.embedding_model
+                        ),
+                        knowledge_base=(
+                            st.session_state.rag_index
+                        ),
+                        top_k=4,
+                    )
+
+                except Exception as error:
+
+                    st.error(
+                        "❌ RAG search failed."
+                    )
+
                     st.code(str(error))
+
+                    st.stop()
+
+
+            # -------------------------------------------------
+            # RELEVANCE CHECK
+            # -------------------------------------------------
+
+            if not results:
+
+                answer = (
+                    "I couldn't find enough relevant "
+                    "information in the uploaded study "
+                    "material to answer this question "
+                    "confidently."
+                )
+
+                st.warning(answer)
+
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": answer,
+                    }
+                )
 
                 st.stop()
 
 
-        # -------------------------------------------------
-        # RELEVANCE CHECK
-        # -------------------------------------------------
-
-        if not results:
-
-            st.warning(
-                "⚠️ I couldn't find enough relevant "
-                "information in the uploaded study material "
-                "to answer this question confidently."
+            best_score = get_best_relevance_score(
+                results
             )
 
-            st.info(
-                "Please ask a question related to the "
-                "uploaded PDF or upload a more relevant "
-                "study document."
+
+            # -------------------------------------------------
+            # CONTEXT
+            # -------------------------------------------------
+
+            retrieved_context = "\n\n".join(
+                result["text"]
+                for result in results
             )
 
-            st.stop()
 
-
-        best_score = get_best_relevance_score(
-            results
-        )
-
-
-        # -------------------------------------------------
-        # SHOW RETRIEVAL
-        # -------------------------------------------------
-
-        with st.expander(
-            "🔎 Retrieved Study Material"
-        ):
-
-            st.caption(
-                f"Best relevance score: "
-                f"{best_score:.3f}"
+            st.session_state.last_context = (
+                retrieved_context
             )
 
-            for number, result in enumerate(
-                results,
-                start=1,
+
+            # -------------------------------------------------
+            # SHOW SOURCES
+            # -------------------------------------------------
+
+            with st.expander(
+                "🔎 Retrieved Study Material"
             ):
 
-                st.markdown(
-                    f"**Source Chunk {number}**"
-                )
-
-                st.write(
-                    result["text"]
-                )
-
                 st.caption(
-                    f"Relevance Score: "
-                    f"{result['score']:.3f}"
+                    f"Best relevance score: "
+                    f"{best_score:.3f}"
                 )
 
-                st.divider()
+                for number, result in enumerate(
+                    results,
+                    start=1,
+                ):
+
+                    st.markdown(
+                        f"**Source Chunk {number}**"
+                    )
+
+                    st.write(
+                        result["text"]
+                    )
+
+                    st.caption(
+                        f"Relevance Score: "
+                        f"{result['score']:.3f}"
+                    )
+
+                    st.divider()
 
 
-        retrieved_context = "\n\n".join(
-            result["text"]
-            for result in results
+            # -------------------------------------------------
+            # REQUEST
+            # -------------------------------------------------
+
+            request_data = {
+
+                "mode": selected_mode,
+
+                "question": question,
+
+                "academic_level": academic_level,
+
+                "subject": subject,
+
+                "language": language,
+
+                "explanation_style": explanation_style,
+
+                "retrieved_context": retrieved_context,
+
+                "history": st.session_state.messages[
+                    :-1
+                ],
+            }
+
+
+            # -------------------------------------------------
+            # MULTI AGENT
+            # -------------------------------------------------
+
+            with st.spinner(
+                "🤖 Tutor → Research → Evaluation..."
+            ):
+
+                try:
+
+                    answer = run_ai_tutor(
+                        request_data=request_data,
+                        api_key=GROQ_API_KEY,
+                        model=model,
+                    )
+
+                except Exception as error:
+
+                    st.error(
+                        "❌ Unable to generate answer."
+                    )
+
+                    with st.expander(
+                        "Technical error"
+                    ):
+
+                        st.code(str(error))
+
+                    st.stop()
+
+
+            if answer:
+
+                st.markdown(answer)
+
+                st.session_state.last_question = (
+                    question
+                )
+
+                st.session_state.last_answer = (
+                    answer
+                )
+
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": answer,
+                    }
+                )
+
+
+    # =====================================================
+    # GENERAL AI TUTOR MODE
+    # =====================================================
+
+    else:
+
+        st.session_state.messages.append(
+            {
+                "role": "user",
+                "content": question,
+            }
         )
 
 
-        # -------------------------------------------------
-        # REQUEST DATA
-        # -------------------------------------------------
+        with st.chat_message("user"):
 
-        request_data = {
-
-            "mode": "PDF Question Answering",
-
-            "question": question.strip(),
-
-            "academic_level": academic_level,
-
-            "subject": subject,
-
-            "language": language,
-
-            "explanation_style": explanation_style,
-
-            "retrieved_context": retrieved_context,
-        }
+            st.markdown(question)
 
 
-        # -------------------------------------------------
-        # MULTI AGENT
-        # -------------------------------------------------
+        with st.chat_message("assistant"):
 
-        with st.spinner(
-            "🤖 Tutor → Research → Evaluation..."
-        ):
+            request_data = {
 
-            try:
+                "mode": "AI Tutor",
 
-                answer = run_ai_tutor(
-                    request_data=request_data,
-                    api_key=GROQ_API_KEY,
-                    model=model,
-                )
+                "question": question,
 
-                if answer:
+                "academic_level": academic_level,
 
-                    st.subheader(
-                        "📖 AI Tutor Answer"
+                "subject": subject,
+
+                "language": language,
+
+                "explanation_style": explanation_style,
+
+                "retrieved_context": "",
+
+                "history": st.session_state.messages[
+                    :-1
+                ],
+            }
+
+
+            with st.spinner(
+                "🤖 Tutor → Research → Evaluation..."
+            ):
+
+                try:
+
+                    answer = run_ai_tutor(
+                        request_data=request_data,
+                        api_key=GROQ_API_KEY,
+                        model=model,
                     )
 
-                    st.markdown(answer)
-
-                else:
+                except Exception as error:
 
                     st.error(
-                        "❌ AI returned an empty answer."
+                        "❌ Unable to generate answer."
                     )
 
-            except Exception as error:
+                    with st.expander(
+                        "Technical error"
+                    ):
 
-                st.error(
-                    "❌ Unable to generate the answer."
+                        st.code(str(error))
+
+                    st.stop()
+
+
+            if answer:
+
+                st.markdown(answer)
+
+                st.session_state.last_question = (
+                    question
                 )
 
-                with st.expander(
-                    "Technical error"
-                ):
+                st.session_state.last_answer = (
+                    answer
+                )
+
+                st.session_state.last_context = ""
+
+                st.session_state.messages.append(
+                    {
+                        "role": "assistant",
+                        "content": answer,
+                    }
+                )
+
+
+# =========================================================
+# LEARNING TOOLS
+# =========================================================
+
+if st.session_state.last_question:
+
+    st.divider()
+
+    st.subheader("🧠 Learning Tools")
+
+    st.caption(
+        "Use these tools to learn the current topic "
+        "in different ways."
+    )
+
+
+    col1, col2, col3 = st.columns(3)
+
+
+    # =====================================================
+    # EXPLAIN AGAIN
+    # =====================================================
+
+    with col1:
+
+        if st.button(
+            "🔄 Explain Again",
+            use_container_width=True,
+        ):
+
+            tool = "Explain Again"
+
+
+            request_data = {
+
+                "mode": selected_mode,
+
+                "question": (
+                    st.session_state.last_question
+                ),
+
+                "academic_level": academic_level,
+
+                "subject": subject,
+
+                "language": language,
+
+                "retrieved_context": (
+                    st.session_state.last_context
+                ),
+
+                "history": st.session_state.messages,
+            }
+
+
+            with st.spinner(
+                "🔄 Explaining again..."
+            ):
+
+                try:
+
+                    tool_answer = run_learning_tool(
+                        tool=tool,
+                        request_data=request_data,
+                        api_key=GROQ_API_KEY,
+                        model=model,
+                    )
+
+                    st.session_state.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": tool_answer,
+                        }
+                    )
+
+                    st.rerun()
+
+                except Exception as error:
+
+                    st.error(
+                        "❌ Learning tool failed."
+                    )
 
                     st.code(str(error))
 
 
-# =========================================================
-# GENERAL AI TUTOR MODE
-# =========================================================
+    # =====================================================
+    # SIMPLE EXPLANATION
+    # =====================================================
 
-else:
+    with col2:
 
-    st.header("🤖 AI Tutor")
-
-    st.info(
-        "Ask the AI Tutor any educational question. "
-        "You do not need to upload a PDF in this mode."
-    )
-
-
-    question = st.text_area(
-        "What would you like to learn?",
-        placeholder=(
-            "Example: Explain Newton's three laws "
-            "of motion with simple examples."
-        ),
-        height=160,
-    )
-
-
-    if st.button(
-        "🚀 Ask AI Tutor",
-        type="primary",
-        use_container_width=True,
-    ):
-
-        if not question.strip():
-
-            st.warning(
-                "⚠️ Please enter your question."
-            )
-
-            st.stop()
-
-
-        # -------------------------------------------------
-        # GENERAL AI REQUEST
-        # -------------------------------------------------
-
-        request_data = {
-
-            "mode": "AI Tutor",
-
-            "question": question.strip(),
-
-            "academic_level": academic_level,
-
-            "subject": subject,
-
-            "language": language,
-
-            "explanation_style": explanation_style,
-
-            "retrieved_context": "",
-        }
-
-
-        # -------------------------------------------------
-        # MULTI AGENT
-        # -------------------------------------------------
-
-        with st.spinner(
-            "🤖 Tutor → Research → Evaluation..."
+        if st.button(
+            "🧒 Explain Simply",
+            use_container_width=True,
         ):
 
-            try:
+            tool = "Explain Simply"
 
-                answer = run_ai_tutor(
-                    request_data=request_data,
-                    api_key=GROQ_API_KEY,
-                    model=model,
-                )
 
-                if answer:
+            request_data = {
 
-                    st.subheader(
-                        "🎓 AI Tutor Answer"
+                "mode": selected_mode,
+
+                "question": (
+                    st.session_state.last_question
+                ),
+
+                "academic_level": academic_level,
+
+                "subject": subject,
+
+                "language": language,
+
+                "retrieved_context": (
+                    st.session_state.last_context
+                ),
+
+                "history": st.session_state.messages,
+            }
+
+
+            with st.spinner(
+                "🧒 Simplifying..."
+            ):
+
+                try:
+
+                    tool_answer = run_learning_tool(
+                        tool=tool,
+                        request_data=request_data,
+                        api_key=GROQ_API_KEY,
+                        model=model,
                     )
 
-                    st.markdown(answer)
+                    st.session_state.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": tool_answer,
+                        }
+                    )
 
-                else:
+                    st.rerun()
+
+                except Exception as error:
 
                     st.error(
-                        "❌ AI returned an empty answer."
+                        "❌ Learning tool failed."
                     )
 
-            except Exception as error:
+                    st.code(str(error))
 
-                st.error(
-                    "❌ Unable to generate the answer."
-                )
 
-                with st.expander(
-                    "Technical error"
-                ):
+    # =====================================================
+    # EXAMPLE
+    # =====================================================
+
+    with col3:
+
+        if st.button(
+            "💡 Give Example",
+            use_container_width=True,
+        ):
+
+            tool = "Give Example"
+
+
+            request_data = {
+
+                "mode": selected_mode,
+
+                "question": (
+                    st.session_state.last_question
+                ),
+
+                "academic_level": academic_level,
+
+                "subject": subject,
+
+                "language": language,
+
+                "retrieved_context": (
+                    st.session_state.last_context
+                ),
+
+                "history": st.session_state.messages,
+            }
+
+
+            with st.spinner(
+                "💡 Creating example..."
+            ):
+
+                try:
+
+                    tool_answer = run_learning_tool(
+                        tool=tool,
+                        request_data=request_data,
+                        api_key=GROQ_API_KEY,
+                        model=model,
+                    )
+
+                    st.session_state.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": tool_answer,
+                        }
+                    )
+
+                    st.rerun()
+
+                except Exception as error:
+
+                    st.error(
+                        "❌ Learning tool failed."
+                    )
+
+                    st.code(str(error))
+
+
+    # =====================================================
+    # SECOND ROW
+    # =====================================================
+
+    col4, col5, col6 = st.columns(3)
+
+
+    # =====================================================
+    # EXAM ANSWER
+    # =====================================================
+
+    with col4:
+
+        if st.button(
+            "📝 Exam Answer",
+            use_container_width=True,
+        ):
+
+            tool = "Exam Answer"
+
+
+            request_data = {
+
+                "mode": selected_mode,
+
+                "question": (
+                    st.session_state.last_question
+                ),
+
+                "academic_level": academic_level,
+
+                "subject": subject,
+
+                "language": language,
+
+                "retrieved_context": (
+                    st.session_state.last_context
+                ),
+
+                "history": st.session_state.messages,
+            }
+
+
+            with st.spinner(
+                "📝 Preparing exam answer..."
+            ):
+
+                try:
+
+                    tool_answer = run_learning_tool(
+                        tool=tool,
+                        request_data=request_data,
+                        api_key=GROQ_API_KEY,
+                        model=model,
+                    )
+
+                    st.session_state.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": tool_answer,
+                        }
+                    )
+
+                    st.rerun()
+
+                except Exception as error:
+
+                    st.error(
+                        "❌ Learning tool failed."
+                    )
+
+                    st.code(str(error))
+
+
+    # =====================================================
+    # SUMMARY
+    # =====================================================
+
+    with col5:
+
+        if st.button(
+            "📚 Create Summary",
+            use_container_width=True,
+        ):
+
+            tool = "Summary"
+
+
+            request_data = {
+
+                "mode": selected_mode,
+
+                "question": (
+                    st.session_state.last_question
+                ),
+
+                "academic_level": academic_level,
+
+                "subject": subject,
+
+                "language": language,
+
+                "retrieved_context": (
+                    st.session_state.last_context
+                ),
+
+                "history": st.session_state.messages,
+            }
+
+
+            with st.spinner(
+                "📚 Creating summary..."
+            ):
+
+                try:
+
+                    tool_answer = run_learning_tool(
+                        tool=tool,
+                        request_data=request_data,
+                        api_key=GROQ_API_KEY,
+                        model=model,
+                    )
+
+                    st.session_state.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": tool_answer,
+                        }
+                    )
+
+                    st.rerun()
+
+                except Exception as error:
+
+                    st.error(
+                        "❌ Learning tool failed."
+                    )
+
+                    st.code(str(error))
+
+
+    # =====================================================
+    # QUIZ
+    # =====================================================
+
+    with col6:
+
+        if st.button(
+            "❓ Generate Quiz",
+            use_container_width=True,
+        ):
+
+            tool = "Quiz"
+
+
+            request_data = {
+
+                "mode": selected_mode,
+
+                "question": (
+                    st.session_state.last_question
+                ),
+
+                "academic_level": academic_level,
+
+                "subject": subject,
+
+                "language": language,
+
+                "retrieved_context": (
+                    st.session_state.last_context
+                ),
+
+                "history": st.session_state.messages,
+            }
+
+
+            with st.spinner(
+                "❓ Generating quiz..."
+            ):
+
+                try:
+
+                    tool_answer = run_learning_tool(
+                        tool=tool,
+                        request_data=request_data,
+                        api_key=GROQ_API_KEY,
+                        model=model,
+                    )
+
+                    st.session_state.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": tool_answer,
+                        }
+                    )
+
+                    st.rerun()
+
+                except Exception as error:
+
+                    st.error(
+                        "❌ Quiz generation failed."
+                    )
 
                     st.code(str(error))
 
@@ -563,5 +1106,5 @@ st.divider()
 
 st.caption(
     "🎓 AI Education / AI Tutor • "
-    "RAG + Multi-Agent Educational System"
+    "RAG + Multi-Agent + Learning Tools"
 )
