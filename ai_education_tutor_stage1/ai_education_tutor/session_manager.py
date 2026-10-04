@@ -5,31 +5,43 @@
 import streamlit as st
 
 
+# =========================================================
+# INITIALIZE SESSION STATE
+# =========================================================
+
 def initialize_session_state():
     """
     Initialize all Streamlit session-state variables.
     """
+
     # =====================================================
-    # QUIZ SESSION
+    # PDF QUIZ SESSION
     # =====================================================
-    
-    if "quiz_history" not in st.session_state:
-        st.session_state.quiz_history = []
-    
-    if "active_quiz" not in st.session_state:
-        st.session_state.active_quiz = None
-    
-    if "quiz_answers" not in st.session_state:
-        st.session_state.quiz_answers = {}
-    
-    if "quiz_score" not in st.session_state:
-        st.session_state.quiz_score = 0
-    
-    if "quiz_submitted" not in st.session_state:
-        st.session_state.quiz_submitted = False
-    
-    if "quiz_source_mode" not in st.session_state:
-        st.session_state.quiz_source_mode = ""
+
+    if "pdf_quiz" not in st.session_state:
+        st.session_state.pdf_quiz = {
+            "history": [],
+            "active_quiz": None,
+            "answers": {},
+            "score": 0,
+            "submitted": False,
+            "source_mode": "PDF Question Answering",
+        }
+
+    # =====================================================
+    # AI TUTOR QUIZ SESSION
+    # =====================================================
+
+    if "tutor_quiz" not in st.session_state:
+        st.session_state.tutor_quiz = {
+            "history": [],
+            "active_quiz": None,
+            "answers": {},
+            "score": 0,
+            "submitted": False,
+            "source_mode": "AI Tutor",
+        }
+
     # =====================================================
     # RAG / PDF STATE
     # =====================================================
@@ -49,7 +61,6 @@ def initialize_session_state():
     if "uploaded_file_name" not in st.session_state:
         st.session_state.uploaded_file_name = ""
 
-
     # =====================================================
     # PDF CONVERSATION MEMORY
     # =====================================================
@@ -66,7 +77,6 @@ def initialize_session_state():
     if "pdf_last_context" not in st.session_state:
         st.session_state.pdf_last_context = ""
 
-
     # =====================================================
     # AI TUTOR CONVERSATION MEMORY
     # =====================================================
@@ -82,21 +92,26 @@ def initialize_session_state():
 
 
 # =========================================================
-# MEMORY FUNCTIONS
+# CONVERSATION CLEAR FUNCTIONS
 # =========================================================
 
 def clear_pdf_conversation():
 
     st.session_state.pdf_messages = []
+
     st.session_state.pdf_last_question = ""
+
     st.session_state.pdf_last_answer = ""
+
     st.session_state.pdf_last_context = ""
 
 
 def clear_tutor_conversation():
 
     st.session_state.tutor_messages = []
+
     st.session_state.tutor_last_question = ""
+
     st.session_state.tutor_last_answer = ""
 
 
@@ -120,14 +135,15 @@ def reset_pdf_conversation():
     """
     Clear PDF conversation when a new PDF is uploaded.
 
-    AI Tutor memory is NOT affected.
+    AI Tutor memory and AI Tutor quiz history
+    are NOT affected.
     """
 
     clear_pdf_conversation()
 
 
 # =========================================================
-# CURRENT MEMORY
+# CURRENT CONVERSATION MEMORY
 # =========================================================
 
 def get_current_memory(selected_mode):
@@ -147,27 +163,94 @@ def get_current_memory(selected_mode):
         "last_answer": st.session_state.tutor_last_answer,
         "last_context": "",
     }
-def clear_quiz_session():
 
-    st.session_state.quiz_history = []
 
-    st.session_state.active_quiz = None
+# =========================================================
+# QUIZ STATE FUNCTIONS
+# =========================================================
 
-    st.session_state.quiz_answers = {}
+def get_quiz_state(selected_mode):
 
-    st.session_state.quiz_score = 0
+    """
+    Return the quiz state belonging ONLY to the current mode.
 
-    st.session_state.quiz_submitted = False
+    PDF mode  -> pdf_quiz
+    Tutor mode -> tutor_quiz
+    """
 
-    st.session_state.quiz_source_mode = ""
-    
-def get_quiz_memory():
+    if selected_mode == "📚 PDF Question Answering":
+
+        return st.session_state.pdf_quiz
+
+    return st.session_state.tutor_quiz
+
+
+# =========================================================
+# CLEAR CURRENT MODE QUIZ
+# =========================================================
+
+def clear_quiz_session(selected_mode):
+
+    """
+    Clear ONLY the quiz belonging to the selected mode.
+
+    This does NOT affect the other mode's quiz.
+    """
+
+    quiz = get_quiz_state(selected_mode)
+
+    quiz["history"] = []
+
+    quiz["active_quiz"] = None
+
+    quiz["answers"] = {}
+
+    quiz["score"] = 0
+
+    quiz["submitted"] = False
+
+
+# =========================================================
+# RESET ACTIVE QUIZ ONLY
+# =========================================================
+
+def reset_active_quiz(selected_mode):
+
+    """
+    Remove only the currently active quiz.
+
+    Quiz history remains محفوظ.
+    """
+
+    quiz = get_quiz_state(selected_mode)
+
+    quiz["active_quiz"] = None
+
+    quiz["answers"] = {}
+
+    quiz["score"] = 0
+
+    quiz["submitted"] = False
+
+
+# =========================================================
+# GET CURRENT QUIZ MEMORY
+# =========================================================
+
+def get_quiz_memory(selected_mode):
+
+    """
+    Return quiz information for the current mode only.
+    """
+
+    quiz = get_quiz_state(selected_mode)
 
     return {
-        "messages": st.session_state.quiz_history,
-        "active_quiz": st.session_state.active_quiz,
-        "answers": st.session_state.quiz_answers,
-        "score": st.session_state.quiz_score,
-        "submitted": st.session_state.quiz_submitted,
-        "source_mode": st.session_state.quiz_source_mode,
+        "messages": quiz["history"],
+        "history": quiz["history"],
+        "active_quiz": quiz["active_quiz"],
+        "answers": quiz["answers"],
+        "score": quiz["score"],
+        "submitted": quiz["submitted"],
+        "source_mode": quiz["source_mode"],
     }
