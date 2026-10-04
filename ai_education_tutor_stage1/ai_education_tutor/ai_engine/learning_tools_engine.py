@@ -74,12 +74,22 @@ Create a 5-question multiple-choice quiz.
 Every question must be answerable from the provided
 source material.
 
-Each question must contain exactly:
+Each question MUST contain:
 
 - question
 - four options
 - correct_index
 - explanation
+
+The explanation MUST be based only on the provided
+source material.
+
+Do not omit the explanation field.
+
+If the source material does not contain enough
+information for a useful explanation, use a short
+explanation based directly on the relevant source
+passage.
 
 IMPORTANT:
 
@@ -93,7 +103,9 @@ correct option.
 
 Do NOT write the correct answer separately.
 
-The quiz must be returned as valid JSON only.
+Return exactly 5 questions.
+
+Return ONLY valid JSON.
 
 Required format:
 
@@ -113,8 +125,6 @@ Required format:
         }
     ]
 }
-
-Exactly 5 questions are required.
 """,
 }
 
