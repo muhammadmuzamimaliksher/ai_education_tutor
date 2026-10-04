@@ -1,12 +1,30 @@
 import streamlit as st
 
-from config import APP_TITLE, GROQ_API_KEY, DEFAULT_MODEL, AVAILABLE_MODELS
+from config import (
+    APP_TITLE,
+    GROQ_API_KEY,
+    DEFAULT_MODEL,
+    AVAILABLE_MODELS,
+)
+
 from ai_engine import run_ai_tutor
 
+from document_processor import (
+    extract_text_from_pdf,
+    split_text,
+)
 
-# ---------------------------------------------------------
-# Page configuration
-# ---------------------------------------------------------
+from rag_engine import (
+    load_embedding_model,
+    build_knowledge_base,
+    search_knowledge_base,
+)
+
+
+# =========================================================
+# PAGE CONFIGURATION
+# =========================================================
+
 st.set_page_config(
     page_title=APP_TITLE,
     page_icon="🎓",
@@ -14,31 +32,62 @@ st.set_page_config(
 )
 
 
-# ---------------------------------------------------------
-# Header
-# ---------------------------------------------------------
+# =========================================================
+# HEADER
+# =========================================================
+
 st.title("🎓 AI Education / AI Tutor")
+
 st.write(
-    "An AI-powered learning assistant designed to explain academic "
-    "concepts according to the student's educational level."
+    "AI-powered education platform with "
+    "Multi-Agent and RAG-based learning support."
 )
 
 
-# ---------------------------------------------------------
-# API Key Check
-# ---------------------------------------------------------
+# =========================================================
+# API KEY CHECK
+# =========================================================
+
 if not GROQ_API_KEY:
+
     st.error(
-        "❌ GROQ_API_KEY is not configured.\n\n"
-        "Add GROQ_API_KEY to Streamlit Secrets and reboot the app."
+        "❌ GROQ_API_KEY is not configured."
     )
+
+    st.info(
+        "Add GROQ_API_KEY to Streamlit Secrets "
+        "and reboot the application."
+    )
+
     st.stop()
 
 
-# ---------------------------------------------------------
-# Sidebar
-# ---------------------------------------------------------
+# =========================================================
+# SESSION STATE
+# =========================================================
+
+if "document_chunks" not in st.session_state:
+    st.session_state.document_chunks = []
+
+if "rag_index" not in st.session_state:
+    st.session_state.rag_index = None
+
+if "embedding_model" not in st.session_state:
+    st.session_state.embedding_model = None
+
+if "document_name" not in st.session_state:
+    st.session_state.document_name = ""
+
+if "rag_ready" not in st.session_state:
+    st.session_state.rag_ready = False
+
+
+# =========================================================
+# SIDEBAR
+# =========================================================
+
 with st.sidebar:
+
     st.header("⚙️ Learning Settings")
 
     academic_level = st.selectbox(
@@ -100,54 +149,246 @@ with st.sidebar:
     model = st.selectbox(
         "🤖 AI Model",
         AVAILABLE_MODELS,
-        index=AVAILABLE_MODELS.index(DEFAULT_MODEL)
-        if DEFAULT_MODEL in AVAILABLE_MODELS
-        else 0,
-    )
-
-    st.divider()
-
-    st.info(
-        "Future versions can connect this application to a "
-        "document-based RAG knowledge base."
+        index=(
+            AVAILABLE_MODELS.index(DEFAULT_MODEL)
+            if DEFAULT_MODEL in AVAILABLE_MODELS
+            else 0
+        ),
     )
 
 
-# ---------------------------------------------------------
-# Main Question Area
-# ---------------------------------------------------------
-st.subheader("Ask Your AI Tutor")
+# =========================================================
+# RAG DOCUMENT SECTION
+# =========================================================
+
+st.subheader("📚 Study Material")
+
+uploaded_file = st.file_uploader(
+    "Upload a PDF textbook, lecture note, or study material",
+    type=["pdf"],
+)
+
+
+# =========================================================
+# PROCESS PDF
+# =========================================================
+
+if uploaded_file is not None:
+
+    if (
+        st.session_state.document_name
+        != uploaded_file.name
+    ):
+
+        with st.spinner(
+            "📖 Processing your study material..."
+        ):
+
+            try:
+
+                # -----------------------------------------
+                # Extract text
+                # -----------------------------------------
+
+                text = extract_text_from_pdf(
+                    uploaded_file
+                )
+
+                # -----------------------------------------
+                # Split text
+                # -----------------------------------------
+
+                chunks = split_text(
+                    text,
+                    chunk_size=800,
+                    chunk_overlap=100,
+                )
+
+                if not chunks:
+                    raise ValueError(
+                        "No usable text was found in the PDF."
+                    )
+
+                # -----------------------------------------
+                # Load embedding model
+                # -----------------------------------------
+
+                if (
+                    st.session_state.embedding_model
+                    is None
+                ):
+
+                    st.session_state.embedding_model = (
+                        load_embedding_model()
+                    )
+
+                # -----------------------------------------
+                # Build FAISS database
+                # -----------------------------------------
+
+                index = build_knowledge_base(
+                    chunks,
+                    st.session_state.embedding_model,
+                )
+
+                # -----------------------------------------
+                # Save in session
+                # -----------------------------------------
+
+                st.session_state.document_chunks = chunks
+
+                st.session_state.rag_index = index
+
+                st.session_state.document_name = (
+                    uploaded_file.name
+                )
+
+                st.session_state.rag_ready = True
+
+                st.success(
+                    "✅ Study material processed successfully."
+                )
+
+            except Exception as error:
+
+                st.session_state.rag_ready = False
+
+                st.error(
+                    "❌ Could not process the PDF."
+                )
+
+                with st.expander(
+                    "Technical details"
+                ):
+                    st.code(str(error))
+
+
+# =========================================================
+# KNOWLEDGE BASE STATUS
+# =========================================================
+
+if st.session_state.rag_ready:
+
+    st.success(
+        f"📗 Knowledge Base Ready: "
+        f"{st.session_state.document_name}"
+    )
+
+    st.caption(
+        f"{len(st.session_state.document_chunks)} "
+        "text chunks are available for retrieval."
+    )
+
+
+# =========================================================
+# QUESTION SECTION
+# =========================================================
+
+st.divider()
+
+st.subheader("💬 Ask Your AI Tutor")
 
 question = st.text_area(
-    "✏️ Enter your question",
+    "Enter your question",
     placeholder=(
-        "Example: Explain photosynthesis step by step "
-        "in simple words."
+        "Example: Explain Newton's second law "
+        "using the uploaded textbook."
     ),
     height=150,
 )
 
 
-# ---------------------------------------------------------
-# Ask Button
-# ---------------------------------------------------------
-if st.button("🚀 Ask AI Tutor", type="primary", use_container_width=True):
+# =========================================================
+# ASK AI TUTOR
+# =========================================================
+
+if st.button(
+    "🚀 Ask AI Tutor",
+    type="primary",
+    use_container_width=True,
+):
 
     if not question.strip():
-        st.warning("⚠️ Please enter a question first.")
+
+        st.warning(
+            "⚠️ Please enter a question."
+        )
+
         st.stop()
 
-    request_data = {
-        "question": question.strip(),
-        "academic_level": academic_level,
-        "subject": subject,
-        "language": language,
-        "explanation_style": explanation_style,
-    }
+    # -----------------------------------------------------
+    # RAG SEARCH
+    # -----------------------------------------------------
 
-    with st.spinner("🤔 AI Tutor is thinking..."):
+    retrieved_context = ""
+
+    if st.session_state.rag_ready:
 
         try:
+
+            results = search_knowledge_base(
+                query=question,
+                embedding_model=(
+                    st.session_state.embedding_model
+                ),
+                index=st.session_state.rag_index,
+                chunks=(
+                    st.session_state.document_chunks
+                ),
+                top_k=4,
+            )
+
+            retrieved_context = "\n\n".join(
+                [
+                    result["text"]
+                    for result in results
+                ]
+            )
+
+        except Exception as error:
+
+            st.warning(
+                "⚠️ RAG search failed. "
+                "The AI will answer without "
+                "document context."
+            )
+
+            with st.expander(
+                "RAG technical details"
+            ):
+                st.code(str(error))
+
+
+    # -----------------------------------------------------
+    # AI REQUEST
+    # -----------------------------------------------------
+
+    request_data = {
+
+        "question": question.strip(),
+
+        "academic_level": academic_level,
+
+        "subject": subject,
+
+        "language": language,
+
+        "explanation_style": explanation_style,
+
+        "retrieved_context": retrieved_context,
+    }
+
+
+    # -----------------------------------------------------
+    # GENERATE ANSWER
+    # -----------------------------------------------------
+
+    with st.spinner(
+        "🤔 AI Tutor is preparing your answer..."
+    ):
+
+        try:
+
             answer = run_ai_tutor(
                 request_data=request_data,
                 api_key=GROQ_API_KEY,
@@ -155,29 +396,39 @@ if st.button("🚀 Ask AI Tutor", type="primary", use_container_width=True):
             )
 
             if answer:
-                st.subheader("📖 AI Tutor Answer")
+
+                st.subheader(
+                    "📖 AI Tutor Answer"
+                )
+
                 st.markdown(answer)
 
             else:
+
                 st.error(
-                    "❌ The AI returned an empty response. "
-                    "Please try again."
+                    "❌ AI returned an empty answer."
                 )
 
         except Exception as error:
+
             st.error(
                 "❌ Unable to generate the answer."
             )
 
-            with st.expander("Technical error"):
+            with st.expander(
+                "Technical error"
+            ):
+
                 st.code(str(error))
 
 
-# ---------------------------------------------------------
-# Footer
-# ---------------------------------------------------------
+# =========================================================
+# FOOTER
+# =========================================================
+
 st.divider()
 
 st.caption(
-    "AI Education / AI Tutor • RAG + Multi-Agent Architecture"
+    "AI Education / AI Tutor • "
+    "RAG + Multi-Agent Architecture"
 )
