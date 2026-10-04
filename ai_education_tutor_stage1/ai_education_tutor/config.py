@@ -12,7 +12,7 @@ def get_secret(name: str, default=None):
 
     return os.getenv(name, default)
 
-def get_api_key():
+def get_api_key(GROQ_API_KEY):
     try:
         return st.secrets["GROQ_API_KEY"]
     except Exception:
