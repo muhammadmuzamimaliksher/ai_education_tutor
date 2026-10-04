@@ -1,31 +1,23 @@
+# =========================================================
+# AI EDUCATION / AI TUTOR
+# STREAMLIT MAIN APPLICATION
+# =========================================================
+
 import streamlit as st
 
-from config import (
-    APP_TITLE,
-    GROQ_API_KEY,
-    AVAILABLE_MODELS,
-)
-
-from document_processor import (
-    extract_text_from_pdf,
-    split_text,
-)
-
+from config import APP_TITLE, AVAILABLE_MODELS, DEFAULT_MODEL, get_groq_api_key
+from document_processor import extract_text_from_pdf, split_text
 from rag_engine import (
     load_embedding_model,
     build_knowledge_base,
     search_knowledge_base,
     get_best_relevance_score,
 )
-
-from ai_engine import (
-    run_ai_tutor,
-    run_learning_tool,
-)
+from ai_engine import run_ai_tutor, run_learning_tool
 
 
 # =========================================================
-# PAGE CONFIG
+# PAGE CONFIGURATION
 # =========================================================
 
 st.set_page_config(
@@ -38,6 +30,10 @@ st.set_page_config(
 # =========================================================
 # SESSION STATE
 # =========================================================
+
+# ---------------------------------------------------------
+# RAG / PDF STATE
+# ---------------------------------------------------------
 
 if "rag_ready" not in st.session_state:
     st.session_state.rag_ready = False
@@ -54,17 +50,101 @@ if "embedding_model" not in st.session_state:
 if "uploaded_file_name" not in st.session_state:
     st.session_state.uploaded_file_name = ""
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
 
-if "last_question" not in st.session_state:
-    st.session_state.last_question = ""
+# ---------------------------------------------------------
+# PDF QUESTION ANSWERING MEMORY
+# ---------------------------------------------------------
 
-if "last_answer" not in st.session_state:
-    st.session_state.last_answer = ""
+if "pdf_messages" not in st.session_state:
+    st.session_state.pdf_messages = []
 
-if "last_context" not in st.session_state:
-    st.session_state.last_context = ""
+if "pdf_last_question" not in st.session_state:
+    st.session_state.pdf_last_question = ""
+
+if "pdf_last_answer" not in st.session_state:
+    st.session_state.pdf_last_answer = ""
+
+if "pdf_last_context" not in st.session_state:
+    st.session_state.pdf_last_context = ""
+
+
+# ---------------------------------------------------------
+# AI TUTOR MEMORY
+# ---------------------------------------------------------
+
+if "tutor_messages" not in st.session_state:
+    st.session_state.tutor_messages = []
+
+if "tutor_last_question" not in st.session_state:
+    st.session_state.tutor_last_question = ""
+
+if "tutor_last_answer" not in st.session_state:
+    st.session_state.tutor_last_answer = ""
+
+
+# =========================================================
+# HELPER FUNCTIONS
+# =========================================================
+
+def clear_pdf_conversation():
+    """Clear only PDF Question Answering conversation."""
+
+    st.session_state.pdf_messages = []
+    st.session_state.pdf_last_question = ""
+    st.session_state.pdf_last_answer = ""
+    st.session_state.pdf_last_context = ""
+
+
+def clear_tutor_conversation():
+    """Clear only AI Tutor conversation."""
+
+    st.session_state.tutor_messages = []
+    st.session_state.tutor_last_question = ""
+    st.session_state.tutor_last_answer = ""
+
+
+def clear_current_conversation(selected_mode):
+    """Clear conversation only for the selected mode."""
+
+    if selected_mode == "📚 PDF Question Answering":
+        clear_pdf_conversation()
+
+    else:
+        clear_tutor_conversation()
+
+
+def reset_pdf_after_new_upload():
+    """
+    When a new PDF is uploaded, clear only PDF conversation.
+    AI Tutor memory remains untouched.
+    """
+
+    st.session_state.pdf_messages = []
+    st.session_state.pdf_last_question = ""
+    st.session_state.pdf_last_answer = ""
+    st.session_state.pdf_last_context = ""
+
+
+def get_current_memory(selected_mode):
+    """
+    Return the correct conversation memory according
+    to the currently selected mode.
+    """
+
+    if selected_mode == "📚 PDF Question Answering":
+        return (
+            st.session_state.pdf_messages,
+            st.session_state.pdf_last_question,
+            st.session_state.pdf_last_answer,
+            st.session_state.pdf_last_context,
+        )
+
+    return (
+        st.session_state.tutor_messages,
+        st.session_state.tutor_last_question,
+        st.session_state.tutor_last_answer,
+        "",
+    )
 
 
 # =========================================================
@@ -73,9 +153,11 @@ if "last_context" not in st.session_state:
 
 st.title("🎓 AI Education / AI Tutor")
 
-st.write(
-    "Learn from your study material or ask the AI Tutor "
-    "general educational questions."
+st.markdown(
+    """
+    **Learn smarter with AI-powered tutoring, PDF question answering,
+    RAG-based knowledge retrieval, and multi-agent educational assistance.**
+    """
 )
 
 
@@ -83,633 +165,742 @@ st.write(
 # SIDEBAR
 # =========================================================
 
-st.sidebar.header("⚙️ Settings")
+with st.sidebar:
 
+    st.header("⚙️ Settings")
 
-mode = st.sidebar.radio(
-    "Choose Mode",
-    [
-        "📚 PDF Question Answering",
-        "🤖 AI Tutor",
-    ],
-)
+    # -----------------------------------------------------
+    # MODE
+    # -----------------------------------------------------
 
-
-if mode.startswith("📚"):
-    selected_mode = "PDF Question Answering"
-else:
-    selected_mode = "AI Tutor"
-
-
-model = st.sidebar.selectbox(
-    "AI Model",
-    AVAILABLE_MODELS,
-    index=0,
-)
-
-
-academic_level = st.sidebar.selectbox(
-    "Academic Level",
-    [
-        "School",
-        "College",
-        "University",
-        "Professional",
-        "General",
-    ],
-)
-
-
-subject = st.sidebar.text_input(
-    "Subject",
-    placeholder="e.g. Physics",
-)
-
-
-language = st.sidebar.selectbox(
-    "Answer Language",
-    [
-        "English",
-        "Urdu",
-        "Roman Urdu",
-    ],
-)
-
-
-explanation_style = st.sidebar.selectbox(
-    "Explanation Style",
-    [
-        "Simple",
-        "Detailed",
-        "Step-by-Step",
-        "Exam Preparation",
-    ],
-)
-
-
-# =========================================================
-# CONVERSATION CONTROLS
-# =========================================================
-
-st.sidebar.divider()
-
-st.sidebar.subheader("💬 Conversation")
-
-if st.sidebar.button(
-    "🗑️ Clear Conversation",
-    use_container_width=True,
-):
-
-    st.session_state.messages = []
-
-    st.session_state.last_question = ""
-
-    st.session_state.last_answer = ""
-
-    st.session_state.last_context = ""
-
-    st.rerun()
-
-
-if st.session_state.messages:
-
-    st.sidebar.caption(
-        f"{len(st.session_state.messages)} "
-        "messages in current session."
+    selected_mode = st.radio(
+        "Choose Learning Mode",
+        [
+            "📚 PDF Question Answering",
+            "🤖 AI Tutor",
+        ],
+        index=0,
     )
 
+    st.divider()
+
+    # -----------------------------------------------------
+    # AI MODEL
+    # -----------------------------------------------------
+
+    model = st.selectbox(
+        "🤖 AI Model",
+        AVAILABLE_MODELS,
+        index=(
+            AVAILABLE_MODELS.index(DEFAULT_MODEL)
+            if DEFAULT_MODEL in AVAILABLE_MODELS
+            else 0
+        ),
+    )
+
+    st.divider()
+
+    # -----------------------------------------------------
+    # EDUCATION SETTINGS
+    # -----------------------------------------------------
+
+    academic_level = st.selectbox(
+        "🎓 Academic Level",
+        [
+            "School",
+            "College",
+            "University",
+            "Professional",
+            "General",
+        ],
+    )
+
+    subject = st.text_input(
+        "📖 Subject",
+        placeholder="e.g. Biology, Physics, SEO, Computer Science",
+    )
+
+    language = st.selectbox(
+        "🌐 Response Language",
+        [
+            "English",
+            "Urdu",
+            "Roman Urdu",
+            "Arabic",
+            "Simple English",
+        ],
+    )
+
+    explanation_style = st.selectbox(
+        "✍️ Explanation Style",
+        [
+            "Detailed",
+            "Simple",
+            "Step-by-Step",
+            "Exam Focused",
+            "Beginner Friendly",
+        ],
+    )
+
+    st.divider()
+
+    # -----------------------------------------------------
+    # CLEAR CURRENT CONVERSATION
+    # -----------------------------------------------------
+
+    clear_label = (
+        "🗑️ Clear PDF Conversation"
+        if selected_mode == "📚 PDF Question Answering"
+        else "🗑️ Clear Tutor Conversation"
+    )
+
+    if st.button(
+        clear_label,
+        use_container_width=True,
+    ):
+        clear_current_conversation(selected_mode)
+
+        st.success("Current conversation cleared.")
+
+        st.rerun()
+
+    st.divider()
+
+    # -----------------------------------------------------
+    # API STATUS
+    # -----------------------------------------------------
+
+    api_key = get_groq_api_key()
+
+    if api_key:
+        st.success("✅ Groq API configured")
+    else:
+        st.error(
+            "❌ GROQ_API_KEY is not configured.\n\n"
+            "Add it to Streamlit Secrets."
+        )
+
 
 # =========================================================
-# PDF MODE
+# CURRENT MEMORY
 # =========================================================
 
-if selected_mode == "PDF Question Answering":
+(
+    current_messages,
+    current_last_question,
+    current_last_answer,
+    current_last_context,
+) = get_current_memory(selected_mode)
+
+
+# =========================================================
+# PDF QUESTION ANSWERING MODE
+# =========================================================
+
+if selected_mode == "📚 PDF Question Answering":
 
     st.header("📚 PDF Question Answering")
 
     st.info(
-        "Upload a study PDF. The AI will answer using "
-        "relevant information retrieved from the document."
+        "Upload your study material. The AI will retrieve relevant "
+        "information from the PDF before generating an answer."
     )
 
-
     # -----------------------------------------------------
-    # UPLOAD PDF
+    # PDF UPLOAD
     # -----------------------------------------------------
 
     uploaded_file = st.file_uploader(
-        "Upload Study PDF",
+        "📄 Upload Study PDF",
         type=["pdf"],
+        help="Upload a text-based PDF for question answering.",
     )
 
+    # -----------------------------------------------------
+    # PROCESS PDF
+    # -----------------------------------------------------
 
     if uploaded_file is not None:
 
+        # Detect a new PDF
         if (
             st.session_state.uploaded_file_name
             != uploaded_file.name
         ):
 
-            with st.spinner(
-                "📄 Reading PDF..."
-            ):
+            with st.spinner("📖 Reading PDF..."):
 
                 try:
 
-                    full_text = extract_text_from_pdf(
+                    # Extract PDF text
+                    document_text = extract_text_from_pdf(
                         uploaded_file
                     )
 
+                    # Split into chunks
                     chunks = split_text(
-                        full_text,
+                        document_text,
                         chunk_size=800,
                         chunk_overlap=100,
                     )
 
                     if not chunks:
-
-                        st.error(
-                            "❌ No usable text was found."
+                        raise ValueError(
+                            "No usable text chunks were created from the PDF."
                         )
 
-                        st.session_state.rag_ready = False
+                    # Load embedding model
+                    if st.session_state.embedding_model is None:
 
-                        st.stop()
+                        with st.spinner(
+                            "🧠 Loading embedding model..."
+                        ):
+                            st.session_state.embedding_model = (
+                                load_embedding_model()
+                            )
 
-
+                    # Build RAG knowledge base
                     with st.spinner(
-                        "🧠 Creating document embeddings..."
+                        "🔎 Building knowledge base..."
                     ):
 
-                        embedding_model = (
-                            load_embedding_model()
+                        knowledge_base = build_knowledge_base(
+                            chunks,
+                            st.session_state.embedding_model,
                         )
 
-                        knowledge_base = (
-                            build_knowledge_base(
-                                chunks,
-                                embedding_model,
-                            )
-                        )
-
-
-                    st.session_state.embedding_model = (
-                        embedding_model
-                    )
-
-                    st.session_state.rag_index = (
-                        knowledge_base
-                    )
-
-                    st.session_state.document_chunks = (
-                        chunks
-                    )
-
+                    # Save RAG state
+                    st.session_state.rag_index = knowledge_base
+                    st.session_state.document_chunks = chunks
                     st.session_state.rag_ready = True
-
                     st.session_state.uploaded_file_name = (
                         uploaded_file.name
                     )
 
-                    # New document = new conversation
-                    st.session_state.messages = []
-
-                    st.session_state.last_question = ""
-
-                    st.session_state.last_answer = ""
-
-                    st.session_state.last_context = ""
+                    # IMPORTANT:
+                    # New PDF clears ONLY PDF conversation.
+                    # AI Tutor conversation remains untouched.
+                    reset_pdf_after_new_upload()
 
                     st.success(
-                        f"✅ PDF ready! "
-                        f"{len(chunks)} chunks created."
+                        f"✅ PDF processed successfully: "
+                        f"{uploaded_file.name}"
+                    )
+
+                    st.info(
+                        f"📄 {len(chunks)} text chunks created."
                     )
 
                 except Exception as error:
 
                     st.session_state.rag_ready = False
+                    st.session_state.rag_index = None
+                    st.session_state.document_chunks = []
 
                     st.error(
-                        "❌ Could not process PDF."
+                        f"❌ PDF processing failed: {error}"
                     )
-
-                    with st.expander(
-                        "Technical error"
-                    ):
-
-                        st.code(str(error))
 
         else:
 
-            st.success(
-                f"✅ {uploaded_file.name} is ready."
-            )
+            # Existing PDF
+            if st.session_state.rag_ready:
+
+                st.success(
+                    f"📄 Active PDF: "
+                    f"{st.session_state.uploaded_file_name}"
+                )
 
 
-# =========================================================
-# DISPLAY CHAT HISTORY
-# =========================================================
+    # -----------------------------------------------------
+    # PDF STATUS
+    # -----------------------------------------------------
 
-for message in st.session_state.messages:
+    if st.session_state.rag_ready:
 
-    with st.chat_message(
-        message["role"]
-    ):
+        st.caption(
+            "🔎 RAG knowledge base is ready. "
+            "Questions will be answered using retrieved PDF content."
+        )
 
-        st.markdown(
-            message["content"]
+    else:
+
+        st.warning(
+            "Please upload and process a PDF before asking "
+            "questions in this mode."
         )
 
 
 # =========================================================
-# USER INPUT
+# AI TUTOR MODE
 # =========================================================
 
-if selected_mode == "PDF Question Answering":
+else:
 
-    question = st.chat_input(
-        "Ask a question about your PDF..."
+    st.header("🤖 AI Tutor")
+
+    st.info(
+        "Ask general educational questions. "
+        "No PDF is required in this mode."
+    )
+
+    st.markdown(
+        """
+        **AI Tutor workflow**
+
+        Question → Tutor Agent → Research Agent → Evaluator Agent → Final Answer
+        """
+    )
+
+
+# =========================================================
+# DISPLAY CURRENT CONVERSATION
+# =========================================================
+
+st.divider()
+
+st.subheader("💬 Conversation")
+
+
+# Refresh current memory after possible PDF processing
+(
+    current_messages,
+    current_last_question,
+    current_last_answer,
+    current_last_context,
+) = get_current_memory(selected_mode)
+
+
+if not current_messages:
+
+    if selected_mode == "📚 PDF Question Answering":
+
+        st.caption(
+            "No PDF conversation yet. Ask a question about your study material."
+        )
+
+    else:
+
+        st.caption(
+            "No AI Tutor conversation yet. Ask your first question."
+        )
+
+
+else:
+
+    for message in current_messages:
+
+        role = message.get("role", "assistant")
+        content = message.get("content", "")
+
+        with st.chat_message(role):
+
+            st.markdown(content)
+
+
+# =========================================================
+# CHAT INPUT
+# =========================================================
+
+if selected_mode == "📚 PDF Question Answering":
+
+    chat_placeholder = (
+        "Ask a question about your uploaded PDF..."
     )
 
 else:
 
-    question = st.chat_input(
-        "Ask your AI Tutor anything..."
+    chat_placeholder = (
+        "Ask your AI Tutor a question..."
     )
 
 
+user_question = st.chat_input(
+    chat_placeholder
+)
+
+
 # =========================================================
-# PROCESS QUESTION
+# PROCESS USER QUESTION
 # =========================================================
 
-if question:
+if user_question:
 
-    question = question.strip()
+    user_question = user_question.strip()
+
+    if not user_question:
+        st.warning("Please enter a question.")
+
+        st.stop()
 
 
-    if not question:
+    # -----------------------------------------------------
+    # CHECK API KEY
+    # -----------------------------------------------------
 
-        st.warning(
-            "⚠️ Please enter a question."
+    if not api_key:
+
+        st.error(
+            "❌ GROQ_API_KEY is not configured.\n\n"
+            "Please add GROQ_API_KEY to Streamlit Secrets."
         )
 
         st.stop()
 
 
-    # =====================================================
-    # PDF MODE
-    # =====================================================
+    # -----------------------------------------------------
+    # PDF MODE VALIDATION
+    # -----------------------------------------------------
 
-    if selected_mode == "PDF Question Answering":
+    if selected_mode == "📚 PDF Question Answering":
 
         if not st.session_state.rag_ready:
 
             st.warning(
-                "⚠️ Please upload a PDF first."
+                "📄 Please upload and process a PDF first."
             )
 
             st.stop()
 
 
-        # -------------------------------------------------
-        # SHOW USER QUESTION
-        # -------------------------------------------------
+    # -----------------------------------------------------
+    # GET CURRENT MODE MEMORY
+    # -----------------------------------------------------
 
-        st.session_state.messages.append(
-            {
-                "role": "user",
-                "content": question,
-            }
-        )
+    if selected_mode == "📚 PDF Question Answering":
 
+        mode_messages = st.session_state.pdf_messages
 
-        with st.chat_message("user"):
+    else:
 
-            st.markdown(question)
+        mode_messages = st.session_state.tutor_messages
 
 
-        # -------------------------------------------------
-        # SEARCH RAG
-        # -------------------------------------------------
+    # -----------------------------------------------------
+    # SAVE USER MESSAGE
+    # -----------------------------------------------------
 
-        with st.chat_message("assistant"):
+    user_message = {
+        "role": "user",
+        "content": user_question,
+    }
 
-            with st.spinner(
-                "🔎 Searching study material..."
-            ):
-
-                try:
-
-                    results = search_knowledge_base(
-                        query=question,
-                        embedding_model=(
-                            st.session_state.embedding_model
-                        ),
-                        knowledge_base=(
-                            st.session_state.rag_index
-                        ),
-                        top_k=4,
-                    )
-
-                except Exception as error:
-
-                    st.error(
-                        "❌ RAG search failed."
-                    )
-
-                    st.code(str(error))
-
-                    st.stop()
+    mode_messages.append(user_message)
 
 
-            # -------------------------------------------------
-            # RELEVANCE CHECK
-            # -------------------------------------------------
+    # -----------------------------------------------------
+    # SHOW USER MESSAGE
+    # -----------------------------------------------------
 
-            if not results:
+    with st.chat_message("user"):
+
+        st.markdown(user_question)
+
+
+    # -----------------------------------------------------
+    # RAG RETRIEVAL
+    # -----------------------------------------------------
+
+    retrieved_context = ""
+    search_results = []
+
+    if selected_mode == "📚 PDF Question Answering":
+
+        try:
+
+            search_results = search_knowledge_base(
+                query=user_question,
+                embedding_model=st.session_state.embedding_model,
+                knowledge_base=st.session_state.rag_index,
+                top_k=4,
+            )
+
+            best_score = get_best_relevance_score(
+                search_results
+            )
+
+            if not search_results:
 
                 answer = (
-                    "I couldn't find enough relevant "
-                    "information in the uploaded study "
-                    "material to answer this question "
-                    "confidently."
+                    "I couldn't find enough information in the "
+                    "provided study material to answer this confidently. "
+                    "Please upload a relevant document or provide more context."
                 )
 
-                st.warning(answer)
+                with st.chat_message("assistant"):
 
-                st.session_state.messages.append(
+                    st.warning(answer)
+
+                st.session_state.pdf_messages.append(
                     {
                         "role": "assistant",
                         "content": answer,
                     }
                 )
+
+                st.session_state.pdf_last_question = (
+                    user_question
+                )
+
+                st.session_state.pdf_last_answer = answer
+                st.session_state.pdf_last_context = ""
 
                 st.stop()
 
 
-            best_score = get_best_relevance_score(
-                results
-            )
+            # Build retrieved context
+            context_parts = []
 
+            for index, result in enumerate(
+                search_results,
+                start=1,
+            ):
 
-            # -------------------------------------------------
-            # CONTEXT
-            # -------------------------------------------------
+                context_parts.append(
+                    f"[Retrieved Section {index}]\n"
+                    f"{result['text']}"
+                )
 
             retrieved_context = "\n\n".join(
-                result["text"]
-                for result in results
+                context_parts
             )
 
 
-            st.session_state.last_context = (
+            # Save current PDF context
+            st.session_state.pdf_last_context = (
                 retrieved_context
             )
 
 
-            # -------------------------------------------------
-            # SHOW SOURCES
-            # -------------------------------------------------
+            st.caption(
+                f"🔎 Retrieved {len(search_results)} relevant "
+                f"sections | Best relevance: {best_score:.2f}"
+            )
 
-            with st.expander(
-                "🔎 Retrieved Study Material"
-            ):
+        except Exception as error:
 
-                st.caption(
-                    f"Best relevance score: "
-                    f"{best_score:.3f}"
-                )
+            error_message = (
+                f"❌ RAG retrieval failed: {error}"
+            )
 
-                for number, result in enumerate(
-                    results,
-                    start=1,
-                ):
+            with st.chat_message("assistant"):
 
-                    st.markdown(
-                        f"**Source Chunk {number}**"
-                    )
+                st.error(error_message)
 
-                    st.write(
-                        result["text"]
-                    )
+            # Save error to correct mode
+            st.session_state.pdf_messages.append(
+                {
+                    "role": "assistant",
+                    "content": error_message,
+                }
+            )
 
-                    st.caption(
-                        f"Relevance Score: "
-                        f"{result['score']:.3f}"
-                    )
-
-                    st.divider()
-
-
-            # -------------------------------------------------
-            # REQUEST
-            # -------------------------------------------------
-
-            request_data = {
-
-                "mode": selected_mode,
-
-                "question": question,
-
-                "academic_level": academic_level,
-
-                "subject": subject,
-
-                "language": language,
-
-                "explanation_style": explanation_style,
-
-                "retrieved_context": retrieved_context,
-
-                "history": st.session_state.messages[
-                    :-1
-                ],
-            }
-
-
-            # -------------------------------------------------
-            # MULTI AGENT
-            # -------------------------------------------------
-
-            with st.spinner(
-                "🤖 Tutor → Research → Evaluation..."
-            ):
-
-                try:
-
-                    answer = run_ai_tutor(
-                        request_data=request_data,
-                        api_key=GROQ_API_KEY,
-                        model=model,
-                    )
-
-                except Exception as error:
-
-                    st.error(
-                        "❌ Unable to generate answer."
-                    )
-
-                    with st.expander(
-                        "Technical error"
-                    ):
-
-                        st.code(str(error))
-
-                    st.stop()
-
-
-            if answer:
-
-                st.markdown(answer)
-
-                st.session_state.last_question = (
-                    question
-                )
-
-                st.session_state.last_answer = (
-                    answer
-                )
-
-                st.session_state.messages.append(
-                    {
-                        "role": "assistant",
-                        "content": answer,
-                    }
-                )
+            st.stop()
 
 
     # =====================================================
-    # GENERAL AI TUTOR MODE
+    # BUILD REQUEST DATA
     # =====================================================
 
-    else:
+    request_data = {
 
-        st.session_state.messages.append(
-            {
-                "role": "user",
-                "content": question,
-            }
-        )
+        "mode": (
+            "pdf"
+            if selected_mode
+            == "📚 PDF Question Answering"
+            else "tutor"
+        ),
+
+        "question": user_question,
+
+        "topic": subject,
+
+        "subject": subject,
+
+        "academic_level": academic_level,
+
+        "language": language,
+
+        "explanation_style": explanation_style,
+
+        "context": retrieved_context,
+
+        "history": mode_messages[:-1],
+    }
 
 
-        with st.chat_message("user"):
+    # =====================================================
+    # MULTI-AGENT AI PIPELINE
+    # =====================================================
 
-            st.markdown(question)
-
+    try:
 
         with st.chat_message("assistant"):
 
-            request_data = {
-
-                "mode": "AI Tutor",
-
-                "question": question,
-
-                "academic_level": academic_level,
-
-                "subject": subject,
-
-                "language": language,
-
-                "explanation_style": explanation_style,
-
-                "retrieved_context": "",
-
-                "history": st.session_state.messages[
-                    :-1
-                ],
-            }
-
-
             with st.spinner(
-                "🤖 Tutor → Research → Evaluation..."
+                "🧠 Tutor Agent is thinking..."
             ):
 
-                try:
+                result = run_ai_tutor(
+                    request_data=request_data,
+                    api_key=api_key,
+                    model=model,
+                )
 
-                    answer = run_ai_tutor(
-                        request_data=request_data,
-                        api_key=GROQ_API_KEY,
-                        model=model,
+
+            # -------------------------------------------------
+            # RESULT HANDLING
+            # -------------------------------------------------
+
+            if isinstance(result, dict):
+
+                answer = result.get(
+                    "answer",
+                    "",
+                )
+
+                if not answer:
+
+                    answer = result.get(
+                        "final_answer",
+                        "",
                     )
 
-                except Exception as error:
+                if not answer:
 
-                    st.error(
-                        "❌ Unable to generate answer."
+                    answer = (
+                        "The AI did not return a usable answer."
                     )
 
-                    with st.expander(
-                        "Technical error"
-                    ):
+            else:
 
-                        st.code(str(error))
-
-                    st.stop()
+                answer = str(result)
 
 
-            if answer:
+            st.markdown(answer)
 
-                st.markdown(answer)
 
-                st.session_state.last_question = (
-                    question
-                )
+        # =====================================================
+        # SAVE ASSISTANT ANSWER TO CORRECT MEMORY
+        # =====================================================
 
-                st.session_state.last_answer = (
-                    answer
-                )
+        assistant_message = {
+            "role": "assistant",
+            "content": answer,
+        }
 
-                st.session_state.last_context = ""
+        if selected_mode == "📚 PDF Question Answering":
 
-                st.session_state.messages.append(
-                    {
-                        "role": "assistant",
-                        "content": answer,
-                    }
-                )
+            st.session_state.pdf_messages.append(
+                assistant_message
+            )
+
+            st.session_state.pdf_last_question = (
+                user_question
+            )
+
+            st.session_state.pdf_last_answer = answer
+
+        else:
+
+            st.session_state.tutor_messages.append(
+                assistant_message
+            )
+
+            st.session_state.tutor_last_question = (
+                user_question
+            )
+
+            st.session_state.tutor_last_answer = answer
+
+
+    except Exception as error:
+
+        error_message = (
+            f"❌ AI processing failed: {error}"
+        )
+
+        with st.chat_message("assistant"):
+
+            st.error(error_message)
+
+
+        # Save error to correct conversation
+        if selected_mode == "📚 PDF Question Answering":
+
+            st.session_state.pdf_messages.append(
+                {
+                    "role": "assistant",
+                    "content": error_message,
+                }
+            )
+
+        else:
+
+            st.session_state.tutor_messages.append(
+                {
+                    "role": "assistant",
+                    "content": error_message,
+                }
+            )
+
+
+# =========================================================
+# REFRESH CURRENT MEMORY FOR LEARNING TOOLS
+# =========================================================
+
+(
+    current_messages,
+    current_last_question,
+    current_last_answer,
+    current_last_context,
+) = get_current_memory(selected_mode)
 
 
 # =========================================================
 # LEARNING TOOLS
 # =========================================================
 
-if st.session_state.last_question:
+if current_last_question and current_last_answer:
 
     st.divider()
 
     st.subheader("🧠 Learning Tools")
 
     st.caption(
-        "Use these tools to learn the current topic "
-        "in different ways."
+        "Use these tools with your most recent question and answer."
     )
 
+    tool_columns = st.columns(3)
 
-    col1, col2, col3 = st.columns(3)
 
-
-    # =====================================================
+    # -----------------------------------------------------
     # EXPLAIN AGAIN
-    # =====================================================
+    # -----------------------------------------------------
 
-    with col1:
+    with tool_columns[0]:
 
         if st.button(
             "🔄 Explain Again",
             use_container_width=True,
         ):
 
-            tool = "Explain Again"
+            tool_request = {
 
-
-            request_data = {
-
-                "mode": selected_mode,
-
-                "question": (
-                    st.session_state.last_question
+                "mode": (
+                    "pdf"
+                    if selected_mode
+                    == "📚 PDF Question Answering"
+                    else "tutor"
                 ),
+
+                "question": current_last_question,
+
+                "answer": current_last_answer,
+
+                "context": current_last_context,
+
+                "history": current_messages,
 
                 "academic_level": academic_level,
 
@@ -717,66 +908,84 @@ if st.session_state.last_question:
 
                 "language": language,
 
-                "retrieved_context": (
-                    st.session_state.last_context
-                ),
-
-                "history": st.session_state.messages,
+                "explanation_style": explanation_style,
             }
 
 
-            with st.spinner(
-                "🔄 Explaining again..."
-            ):
+            try:
 
-                try:
+                with st.spinner(
+                    "🔄 Explaining again..."
+                ):
 
                     tool_answer = run_learning_tool(
-                        tool=tool,
-                        request_data=request_data,
-                        api_key=GROQ_API_KEY,
+                        tool="Explain Again",
+                        request_data=tool_request,
+                        api_key=api_key,
                         model=model,
                     )
 
-                    st.session_state.messages.append(
+
+                with st.chat_message("assistant"):
+
+                    st.markdown(tool_answer)
+
+
+                if selected_mode == "📚 PDF Question Answering":
+
+                    st.session_state.pdf_messages.append(
                         {
                             "role": "assistant",
                             "content": tool_answer,
                         }
                     )
 
-                    st.rerun()
+                else:
 
-                except Exception as error:
-
-                    st.error(
-                        "❌ Learning tool failed."
+                    st.session_state.tutor_messages.append(
+                        {
+                            "role": "assistant",
+                            "content": tool_answer,
+                        }
                     )
 
-                    st.code(str(error))
+                st.rerun()
 
 
-    # =====================================================
-    # SIMPLE EXPLANATION
-    # =====================================================
+            except Exception as error:
 
-    with col2:
+                st.error(
+                    f"❌ Learning tool failed: {error}"
+                )
+
+
+    # -----------------------------------------------------
+    # EXPLAIN SIMPLY
+    # -----------------------------------------------------
+
+    with tool_columns[1]:
 
         if st.button(
             "🧒 Explain Simply",
             use_container_width=True,
         ):
 
-            tool = "Explain Simply"
+            tool_request = {
 
-
-            request_data = {
-
-                "mode": selected_mode,
-
-                "question": (
-                    st.session_state.last_question
+                "mode": (
+                    "pdf"
+                    if selected_mode
+                    == "📚 PDF Question Answering"
+                    else "tutor"
                 ),
+
+                "question": current_last_question,
+
+                "answer": current_last_answer,
+
+                "context": current_last_context,
+
+                "history": current_messages,
 
                 "academic_level": academic_level,
 
@@ -784,66 +993,84 @@ if st.session_state.last_question:
 
                 "language": language,
 
-                "retrieved_context": (
-                    st.session_state.last_context
-                ),
-
-                "history": st.session_state.messages,
+                "explanation_style": "Simple",
             }
 
 
-            with st.spinner(
-                "🧒 Simplifying..."
-            ):
+            try:
 
-                try:
+                with st.spinner(
+                    "🧒 Making explanation simpler..."
+                ):
 
                     tool_answer = run_learning_tool(
-                        tool=tool,
-                        request_data=request_data,
-                        api_key=GROQ_API_KEY,
+                        tool="Explain Simply",
+                        request_data=tool_request,
+                        api_key=api_key,
                         model=model,
                     )
 
-                    st.session_state.messages.append(
+
+                with st.chat_message("assistant"):
+
+                    st.markdown(tool_answer)
+
+
+                if selected_mode == "📚 PDF Question Answering":
+
+                    st.session_state.pdf_messages.append(
                         {
                             "role": "assistant",
                             "content": tool_answer,
                         }
                     )
 
-                    st.rerun()
+                else:
 
-                except Exception as error:
-
-                    st.error(
-                        "❌ Learning tool failed."
+                    st.session_state.tutor_messages.append(
+                        {
+                            "role": "assistant",
+                            "content": tool_answer,
+                        }
                     )
 
-                    st.code(str(error))
+                st.rerun()
 
 
-    # =====================================================
-    # EXAMPLE
-    # =====================================================
+            except Exception as error:
 
-    with col3:
+                st.error(
+                    f"❌ Learning tool failed: {error}"
+                )
+
+
+    # -----------------------------------------------------
+    # GIVE EXAMPLE
+    # -----------------------------------------------------
+
+    with tool_columns[2]:
 
         if st.button(
             "💡 Give Example",
             use_container_width=True,
         ):
 
-            tool = "Give Example"
+            tool_request = {
 
-
-            request_data = {
-
-                "mode": selected_mode,
-
-                "question": (
-                    st.session_state.last_question
+                "mode": (
+                    "pdf"
+                    if selected_mode
+                    == "📚 PDF Question Answering"
+                    else "tutor"
                 ),
+
+                "question": current_last_question,
+
+                "answer": current_last_answer,
+
+                "context": current_last_context,
+
+                "history": current_messages,
 
                 "academic_level": academic_level,
 
@@ -851,73 +1078,91 @@ if st.session_state.last_question:
 
                 "language": language,
 
-                "retrieved_context": (
-                    st.session_state.last_context
-                ),
-
-                "history": st.session_state.messages,
+                "explanation_style": explanation_style,
             }
 
 
-            with st.spinner(
-                "💡 Creating example..."
-            ):
+            try:
 
-                try:
+                with st.spinner(
+                    "💡 Creating an example..."
+                ):
 
                     tool_answer = run_learning_tool(
-                        tool=tool,
-                        request_data=request_data,
-                        api_key=GROQ_API_KEY,
+                        tool="Give Example",
+                        request_data=tool_request,
+                        api_key=api_key,
                         model=model,
                     )
 
-                    st.session_state.messages.append(
+
+                with st.chat_message("assistant"):
+
+                    st.markdown(tool_answer)
+
+
+                if selected_mode == "📚 PDF Question Answering":
+
+                    st.session_state.pdf_messages.append(
                         {
                             "role": "assistant",
                             "content": tool_answer,
                         }
                     )
 
-                    st.rerun()
+                else:
 
-                except Exception as error:
-
-                    st.error(
-                        "❌ Learning tool failed."
+                    st.session_state.tutor_messages.append(
+                        {
+                            "role": "assistant",
+                            "content": tool_answer,
+                        }
                     )
 
-                    st.code(str(error))
+                st.rerun()
+
+
+            except Exception as error:
+
+                st.error(
+                    f"❌ Learning tool failed: {error}"
+                )
 
 
     # =====================================================
-    # SECOND ROW
+    # SECOND ROW OF LEARNING TOOLS
     # =====================================================
 
-    col4, col5, col6 = st.columns(3)
+    tool_columns_2 = st.columns(3)
 
 
-    # =====================================================
+    # -----------------------------------------------------
     # EXAM ANSWER
-    # =====================================================
+    # -----------------------------------------------------
 
-    with col4:
+    with tool_columns_2[0]:
 
         if st.button(
             "📝 Exam Answer",
             use_container_width=True,
         ):
 
-            tool = "Exam Answer"
+            tool_request = {
 
-
-            request_data = {
-
-                "mode": selected_mode,
-
-                "question": (
-                    st.session_state.last_question
+                "mode": (
+                    "pdf"
+                    if selected_mode
+                    == "📚 PDF Question Answering"
+                    else "tutor"
                 ),
+
+                "question": current_last_question,
+
+                "answer": current_last_answer,
+
+                "context": current_last_context,
+
+                "history": current_messages,
 
                 "academic_level": academic_level,
 
@@ -925,66 +1170,84 @@ if st.session_state.last_question:
 
                 "language": language,
 
-                "retrieved_context": (
-                    st.session_state.last_context
-                ),
-
-                "history": st.session_state.messages,
+                "explanation_style": "Exam Focused",
             }
 
 
-            with st.spinner(
-                "📝 Preparing exam answer..."
-            ):
+            try:
 
-                try:
+                with st.spinner(
+                    "📝 Creating exam-style answer..."
+                ):
 
                     tool_answer = run_learning_tool(
-                        tool=tool,
-                        request_data=request_data,
-                        api_key=GROQ_API_KEY,
+                        tool="Exam Answer",
+                        request_data=tool_request,
+                        api_key=api_key,
                         model=model,
                     )
 
-                    st.session_state.messages.append(
+
+                with st.chat_message("assistant"):
+
+                    st.markdown(tool_answer)
+
+
+                if selected_mode == "📚 PDF Question Answering":
+
+                    st.session_state.pdf_messages.append(
                         {
                             "role": "assistant",
                             "content": tool_answer,
                         }
                     )
 
-                    st.rerun()
+                else:
 
-                except Exception as error:
-
-                    st.error(
-                        "❌ Learning tool failed."
+                    st.session_state.tutor_messages.append(
+                        {
+                            "role": "assistant",
+                            "content": tool_answer,
+                        }
                     )
 
-                    st.code(str(error))
+                st.rerun()
 
 
-    # =====================================================
+            except Exception as error:
+
+                st.error(
+                    f"❌ Learning tool failed: {error}"
+                )
+
+
+    # -----------------------------------------------------
     # SUMMARY
-    # =====================================================
+    # -----------------------------------------------------
 
-    with col5:
+    with tool_columns_2[1]:
 
         if st.button(
-            "📚 Create Summary",
+            "📋 Create Summary",
             use_container_width=True,
         ):
 
-            tool = "Summary"
+            tool_request = {
 
-
-            request_data = {
-
-                "mode": selected_mode,
-
-                "question": (
-                    st.session_state.last_question
+                "mode": (
+                    "pdf"
+                    if selected_mode
+                    == "📚 PDF Question Answering"
+                    else "tutor"
                 ),
+
+                "question": current_last_question,
+
+                "answer": current_last_answer,
+
+                "context": current_last_context,
+
+                "history": current_messages,
 
                 "academic_level": academic_level,
 
@@ -992,66 +1255,84 @@ if st.session_state.last_question:
 
                 "language": language,
 
-                "retrieved_context": (
-                    st.session_state.last_context
-                ),
-
-                "history": st.session_state.messages,
+                "explanation_style": "Simple",
             }
 
 
-            with st.spinner(
-                "📚 Creating summary..."
-            ):
+            try:
 
-                try:
+                with st.spinner(
+                    "📋 Creating summary..."
+                ):
 
                     tool_answer = run_learning_tool(
-                        tool=tool,
-                        request_data=request_data,
-                        api_key=GROQ_API_KEY,
+                        tool="Summary",
+                        request_data=tool_request,
+                        api_key=api_key,
                         model=model,
                     )
 
-                    st.session_state.messages.append(
+
+                with st.chat_message("assistant"):
+
+                    st.markdown(tool_answer)
+
+
+                if selected_mode == "📚 PDF Question Answering":
+
+                    st.session_state.pdf_messages.append(
                         {
                             "role": "assistant",
                             "content": tool_answer,
                         }
                     )
 
-                    st.rerun()
+                else:
 
-                except Exception as error:
-
-                    st.error(
-                        "❌ Learning tool failed."
+                    st.session_state.tutor_messages.append(
+                        {
+                            "role": "assistant",
+                            "content": tool_answer,
+                        }
                     )
 
-                    st.code(str(error))
+                st.rerun()
 
 
-    # =====================================================
+            except Exception as error:
+
+                st.error(
+                    f"❌ Learning tool failed: {error}"
+                )
+
+
+    # -----------------------------------------------------
     # QUIZ
-    # =====================================================
+    # -----------------------------------------------------
 
-    with col6:
+    with tool_columns_2[2]:
 
         if st.button(
             "❓ Generate Quiz",
             use_container_width=True,
         ):
 
-            tool = "Quiz"
+            tool_request = {
 
-
-            request_data = {
-
-                "mode": selected_mode,
-
-                "question": (
-                    st.session_state.last_question
+                "mode": (
+                    "pdf"
+                    if selected_mode
+                    == "📚 PDF Question Answering"
+                    else "tutor"
                 ),
+
+                "question": current_last_question,
+
+                "answer": current_last_answer,
+
+                "context": current_last_context,
+
+                "history": current_messages,
 
                 "academic_level": academic_level,
 
@@ -1059,52 +1340,102 @@ if st.session_state.last_question:
 
                 "language": language,
 
-                "retrieved_context": (
-                    st.session_state.last_context
-                ),
-
-                "history": st.session_state.messages,
+                "explanation_style": "Exam Focused",
             }
 
 
-            with st.spinner(
-                "❓ Generating quiz..."
-            ):
+            try:
 
-                try:
+                with st.spinner(
+                    "❓ Generating quiz..."
+                ):
 
                     tool_answer = run_learning_tool(
-                        tool=tool,
-                        request_data=request_data,
-                        api_key=GROQ_API_KEY,
+                        tool="Quiz",
+                        request_data=tool_request,
+                        api_key=api_key,
                         model=model,
                     )
 
-                    st.session_state.messages.append(
+
+                with st.chat_message("assistant"):
+
+                    st.markdown(tool_answer)
+
+
+                if selected_mode == "📚 PDF Question Answering":
+
+                    st.session_state.pdf_messages.append(
                         {
                             "role": "assistant",
                             "content": tool_answer,
                         }
                     )
 
-                    st.rerun()
+                else:
 
-                except Exception as error:
-
-                    st.error(
-                        "❌ Quiz generation failed."
+                    st.session_state.tutor_messages.append(
+                        {
+                            "role": "assistant",
+                            "content": tool_answer,
+                        }
                     )
 
-                    st.code(str(error))
+                st.rerun()
+
+
+            except Exception as error:
+
+                st.error(
+                    f"❌ Learning tool failed: {error}"
+                )
+
+
+# =========================================================
+# MEMORY STATUS
+# =========================================================
+
+st.divider()
+
+with st.expander("🧠 Conversation Memory Status"):
+
+    pdf_count = len(
+        st.session_state.pdf_messages
+    )
+
+    tutor_count = len(
+        st.session_state.tutor_messages
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        st.metric(
+            "📚 PDF Conversation Messages",
+            pdf_count,
+        )
+
+    with col2:
+
+        st.metric(
+            "🤖 AI Tutor Messages",
+            tutor_count,
+        )
+
+    st.caption(
+        "These two memories are completely separate. "
+        "Switching modes does not transfer conversation history."
+    )
 
 
 # =========================================================
 # FOOTER
 # =========================================================
 
-st.divider()
+st.markdown("---")
 
 st.caption(
-    "🎓 AI Education / AI Tutor • "
-    "RAG + Multi-Agent + Learning Tools"
+    "🎓 AI Education / AI Tutor | "
+    "RAG + Multi-Agent AI + Groq"
 )
