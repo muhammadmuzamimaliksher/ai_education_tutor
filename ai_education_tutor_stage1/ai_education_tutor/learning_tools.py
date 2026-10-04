@@ -6,11 +6,17 @@
 
 import json
 import re
+from datetime import datetime
 
 import streamlit as st
 
 from ai_engine import run_learning_tool
-from session_manager import get_current_memory
+
+from session_manager import (
+    get_current_memory,
+    get_quiz_state,
+    clear_quiz_session,
+)
 
 
 # =========================================================
@@ -28,11 +34,16 @@ def extract_json_from_response(text):
     """
 
     if not text:
-        raise ValueError("Empty quiz response received.")
+        raise ValueError(
+            "Empty quiz response received."
+        )
 
     cleaned = text.strip()
 
+    # -----------------------------------------------------
     # Remove markdown code fences
+    # -----------------------------------------------------
+
     cleaned = re.sub(
         r"^```(?:json)?\s*",
         "",
@@ -48,22 +59,37 @@ def extract_json_from_response(text):
 
     cleaned = cleaned.strip()
 
+    # -----------------------------------------------------
     # First attempt
+    # -----------------------------------------------------
+
     try:
+
         return json.loads(cleaned)
+
     except json.JSONDecodeError:
+
         pass
 
-    # Find JSON object
+    # -----------------------------------------------------
+    # Find JSON object inside response
+    # -----------------------------------------------------
+
     start = cleaned.find("{")
     end = cleaned.rfind("}")
 
     if start != -1 and end != -1:
-        candidate = cleaned[start:end + 1]
+
+        candidate = cleaned[
+            start:end + 1
+        ]
 
         try:
+
             return json.loads(candidate)
+
         except json.JSONDecodeError:
+
             pass
 
     raise ValueError(
@@ -71,21 +97,36 @@ def extract_json_from_response(text):
     )
 
 
+# =========================================================
+# QUIZ VALIDATION
+# =========================================================
+
 def validate_quiz(quiz_data):
 
-    if not isinstance(quiz_data, dict):
+    if not isinstance(
+        quiz_data,
+        dict,
+    ):
+
         raise ValueError(
             "Quiz data must be an object."
         )
 
-    questions = quiz_data.get("questions")
+    questions = quiz_data.get(
+        "questions"
+    )
 
-    if not isinstance(questions, list):
+    if not isinstance(
+        questions,
+        list,
+    ):
+
         raise ValueError(
             "Quiz questions are missing."
         )
 
     if len(questions) != 5:
+
         raise ValueError(
             "Quiz must contain exactly 5 questions."
         )
@@ -95,27 +136,53 @@ def validate_quiz(quiz_data):
         start=1,
     ):
 
-        if not isinstance(question, dict):
+        if not isinstance(
+            question,
+            dict,
+        ):
+
             raise ValueError(
                 f"Question {index} is invalid."
             )
 
-        if not question.get("question"):
+        # -------------------------------------------------
+        # Question text
+        # -------------------------------------------------
+
+        if not question.get(
+            "question"
+        ):
+
             raise ValueError(
                 f"Question {index} has no question text."
             )
 
-        options = question.get("options")
+        # -------------------------------------------------
+        # Options
+        # -------------------------------------------------
 
-        if not isinstance(options, list):
+        options = question.get(
+            "options"
+        )
+
+        if not isinstance(
+            options,
+            list,
+        ):
+
             raise ValueError(
                 f"Question {index} has no options."
             )
 
         if len(options) != 4:
+
             raise ValueError(
                 f"Question {index} must have 4 options."
             )
+
+        # -------------------------------------------------
+        # Correct answer
+        # -------------------------------------------------
 
         correct_index = question.get(
             "correct_index"
@@ -125,50 +192,251 @@ def validate_quiz(quiz_data):
             correct_index,
             int,
         ):
+
             raise ValueError(
                 f"Question {index} has no valid answer."
             )
 
-        if correct_index < 0 or correct_index > 3:
+        if (
+            correct_index < 0
+            or correct_index > 3
+        ):
+
             raise ValueError(
                 f"Question {index} has an invalid answer index."
             )
 
+        # -------------------------------------------------
+        # Explanation
+        # -------------------------------------------------
+        #
         # Explanation is optional.
-        # The quiz must NOT fail just because the AI omitted it.
-        if not question.get("explanation"):
+        # Do NOT fail the entire quiz if the AI omitted it.
+        #
+
+        if not question.get(
+            "explanation"
+        ):
+
             question["explanation"] = ""
 
     return True
 
-def initialize_quiz_state():
 
-    if "active_quiz" not in st.session_state:
-        st.session_state.active_quiz = None
+# =========================================================
+# QUIZ HISTORY
+# =========================================================
 
-    if "quiz_submitted" not in st.session_state:
-        st.session_state.quiz_submitted = False
+def save_quiz_to_history(
+    selected_mode,
+    quiz_data,
+):
+    """
+    Save a newly generated quiz into the history
+    belonging ONLY to the current mode.
 
-    if "quiz_answers" not in st.session_state:
-        st.session_state.quiz_answers = {}
+    PDF quiz -> pdf_quiz["history"]
+    Tutor quiz -> tutor_quiz["history"]
+    """
 
-    if "quiz_score" not in st.session_state:
-        st.session_state.quiz_score = 0
+    quiz_state = get_quiz_state(
+        selected_mode
+    )
+
+    quiz_record = {
+        "created_at": datetime.now().strftime(
+            "%Y-%m-%d %H:%M:%S"
+        ),
+        "quiz": quiz_data,
+        "score": None,
+        "total": len(
+            quiz_data.get(
+                "questions",
+                [],
+            )
+        ),
+        "submitted": False,
+    }
+
+    quiz_state["history"].append(
+        quiz_record
+    )
 
 
-def clear_quiz():
+# =========================================================
+# UPDATE LAST QUIZ HISTORY RECORD
+# =========================================================
 
-    st.session_state.active_quiz = None
-    st.session_state.quiz_submitted = False
-    st.session_state.quiz_answers = {}
-    st.session_state.quiz_score = 0
+def update_latest_quiz_history(
+    selected_mode,
+):
+    """
+    Save the final score of the currently active
+    quiz into the correct mode's quiz history.
+    """
+
+    quiz_state = get_quiz_state(
+        selected_mode
+    )
+
+    history = quiz_state["history"]
+
+    if not history:
+
+        return
+
+    latest = history[-1]
+
+    latest["score"] = quiz_state[
+        "score"
+    ]
+
+    latest["total"] = len(
+        quiz_state[
+            "active_quiz"
+        ].get(
+            "questions",
+            [],
+        )
+    )
+
+    latest["submitted"] = True
+
+    latest["answers"] = dict(
+        quiz_state["answers"]
+    )
 
 
-def render_quiz():
+# =========================================================
+# CLEAR ACTIVE QUIZ
+# =========================================================
 
-    quiz = st.session_state.active_quiz
+def clear_active_quiz(
+    selected_mode,
+):
+    """
+    Clear only the active quiz.
+
+    Quiz history remains untouched.
+    """
+
+    quiz_state = get_quiz_state(
+        selected_mode
+    )
+
+    quiz_state["active_quiz"] = None
+
+    quiz_state["answers"] = {}
+
+    quiz_state["score"] = 0
+
+    quiz_state["submitted"] = False
+
+
+# =========================================================
+# RENDER QUIZ HISTORY
+# =========================================================
+
+def render_quiz_history(
+    selected_mode,
+):
+    """
+    Display quiz history ONLY for the selected mode.
+    """
+
+    quiz_state = get_quiz_state(
+        selected_mode
+    )
+
+    history = quiz_state[
+        "history"
+    ]
+
+    if not history:
+
+        return
+
+    st.divider()
+
+    if (
+        selected_mode
+        == "📚 PDF Question Answering"
+    ):
+
+        st.subheader(
+            "📚 PDF Quiz History"
+        )
+
+    else:
+
+        st.subheader(
+            "🤖 AI Tutor Quiz History"
+        )
+
+    for index, record in enumerate(
+        reversed(history),
+        start=1,
+    ):
+
+        score = record.get(
+            "score"
+        )
+
+        total = record.get(
+            "total",
+            5,
+        )
+
+        created_at = record.get(
+            "created_at",
+            "",
+        )
+
+        if score is None:
+
+            score_text = (
+                "Not submitted"
+            )
+
+        else:
+
+            percentage = round(
+                (score / total) * 100
+            )
+
+            score_text = (
+                f"{score}/{total} "
+                f"({percentage}%)"
+            )
+
+        with st.expander(
+            f"Quiz {len(history) - index + 1} "
+            f"— {score_text}"
+        ):
+
+            st.caption(
+                f"Created: {created_at}"
+            )
+
+
+# =========================================================
+# RENDER ACTIVE QUIZ
+# =========================================================
+
+def render_quiz(
+    selected_mode,
+):
+
+    quiz_state = get_quiz_state(
+        selected_mode
+    )
+
+    quiz = quiz_state[
+        "active_quiz"
+    ]
 
     if not quiz:
+
         return
 
     questions = quiz.get(
@@ -176,13 +444,44 @@ def render_quiz():
         [],
     )
 
+    if not questions:
+
+        return
+
     st.divider()
 
-    st.subheader(
-        "📝 Quiz"
-    )
+    if (
+        selected_mode
+        == "📚 PDF Question Answering"
+    ):
 
-    if not st.session_state.quiz_submitted:
+        st.subheader(
+            "📚 PDF Quiz"
+        )
+
+        st.caption(
+            "This quiz belongs only to "
+            "PDF Question Answering mode."
+        )
+
+    else:
+
+        st.subheader(
+            "🤖 AI Tutor Quiz"
+        )
+
+        st.caption(
+            "This quiz belongs only to "
+            "AI Tutor mode."
+        )
+
+    # =====================================================
+    # QUIZ NOT SUBMITTED
+    # =====================================================
+
+    if not quiz_state[
+        "submitted"
+    ]:
 
         st.info(
             "Select one answer for each question, "
@@ -195,42 +494,59 @@ def render_quiz():
         ):
 
             st.markdown(
-                f"### Question {index} of {len(questions)}"
+                f"### Question {index} "
+                f"of {len(questions)}"
             )
 
             st.write(
                 question["question"]
             )
 
-            options = question["options"]
+            options = question[
+                "options"
+            ]
 
             selected = st.radio(
                 "Choose your answer:",
                 options,
-                key=f"quiz_answer_{index}",
+                key=(
+                    f"{selected_mode}_"
+                    f"quiz_answer_{index}"
+                ),
                 index=None,
             )
 
             if selected is not None:
-                st.session_state.quiz_answers[
+
+                quiz_state[
+                    "answers"
+                ][
                     index - 1
                 ] = selected
 
             st.divider()
 
+        # -------------------------------------------------
+        # SUBMIT
+        # -------------------------------------------------
+
         if st.button(
             "✅ Submit Quiz",
             type="primary",
             use_container_width=True,
+            key=(
+                f"{selected_mode}_"
+                "submit_quiz"
+            ),
         ):
 
             if len(
-                st.session_state.quiz_answers
+                quiz_state["answers"]
             ) != len(questions):
 
                 st.warning(
-                    "Please answer all questions before "
-                    "submitting the quiz."
+                    "Please answer all questions "
+                    "before submitting the quiz."
                 )
 
                 return
@@ -242,31 +558,58 @@ def render_quiz():
             ):
 
                 selected = (
-                    st.session_state.quiz_answers[
-                        index
+                    quiz_state[
+                        "answers"
+                    ][index]
+                )
+
+                correct_index = (
+                    question[
+                        "correct_index"
                     ]
                 )
 
-                correct_index = question[
-                    "correct_index"
-                ]
+                correct_answer = (
+                    question[
+                        "options"
+                    ][correct_index]
+                )
 
-                correct_answer = question[
-                    "options"
-                ][correct_index]
+                if (
+                    selected
+                    == correct_answer
+                ):
 
-                if selected == correct_answer:
                     score += 1
 
-            st.session_state.quiz_score = score
-            st.session_state.quiz_submitted = True
+            quiz_state[
+                "score"
+            ] = score
+
+            quiz_state[
+                "submitted"
+            ] = True
+
+            # Save result to correct mode history
+            update_latest_quiz_history(
+                selected_mode
+            )
 
             st.rerun()
 
+    # =====================================================
+    # QUIZ SUBMITTED
+    # =====================================================
+
     else:
 
-        score = st.session_state.quiz_score
-        total = len(questions)
+        score = quiz_state[
+            "score"
+        ]
+
+        total = len(
+            questions
+        )
 
         percentage = round(
             (score / total) * 100
@@ -279,18 +622,38 @@ def render_quiz():
         )
 
         if percentage >= 80:
+
             st.balloons()
+
             st.success(
                 "Excellent work! 🎉"
             )
+
         elif percentage >= 60:
+
             st.info(
-                "Good effort! Review the incorrect answers."
+                "Good effort! Review the "
+                "incorrect answers."
             )
+
         else:
-            st.warning(
-                "Keep practicing and review the PDF material."
-            )
+
+            if (
+                selected_mode
+                == "📚 PDF Question Answering"
+            ):
+
+                st.warning(
+                    "Keep practicing and review "
+                    "the PDF material."
+                )
+
+            else:
+
+                st.warning(
+                    "Keep practicing and review "
+                    "the topic again."
+                )
 
         st.divider()
 
@@ -303,55 +666,82 @@ def render_quiz():
         ):
 
             selected = (
-                st.session_state.quiz_answers[
-                    index
+                quiz_state[
+                    "answers"
+                ][index]
+            )
+
+            correct_answer = (
+                question[
+                    "options"
+                ][
+                    question[
+                        "correct_index"
+                    ]
                 ]
             )
 
-            correct_answer = question[
-                "options"
-            ][
-                question["correct_index"]
-            ]
-
-            if selected == correct_answer:
+            if (
+                selected
+                == correct_answer
+            ):
 
                 st.success(
-                    f"**Question {index + 1}: ✅ Correct**"
+                    f"**Question {index + 1}: "
+                    f"✅ Correct**"
                 )
 
             else:
 
                 st.error(
-                    f"**Question {index + 1}: ❌ Incorrect**"
+                    f"**Question {index + 1}: "
+                    f"❌ Incorrect**"
                 )
 
                 st.write(
-                    f"Your answer: **{selected}**"
+                    f"Your answer: "
+                    f"**{selected}**"
                 )
 
                 st.write(
-                    f"Correct answer: **{correct_answer}**"
+                    f"Correct answer: "
+                    f"**{correct_answer}**"
                 )
 
-            explanation = question.get(
-                "explanation",
-                ""
+            explanation = (
+                question.get(
+                    "explanation",
+                    "",
+                )
+                or ""
             ).strip()
-            
+
             if explanation:
+
                 st.write(
-                    f"**Explanation:** {explanation}"
+                    f"**Explanation:** "
+                    f"{explanation}"
                 )
 
             st.divider()
 
+        # -------------------------------------------------
+        # NEW QUIZ
+        # -------------------------------------------------
+
         if st.button(
             "🔄 Create New Quiz",
             use_container_width=True,
+            key=(
+                f"{selected_mode}_"
+                "new_quiz"
+            ),
         ):
 
-            clear_quiz()
+            clear_active_quiz(
+                selected_mode
+            )
+
             st.rerun()
 
 
@@ -363,8 +753,6 @@ def render_learning_tools(
     selected_mode,
     settings,
 ):
-
-    initialize_quiz_state()
 
     memory = get_current_memory(
         selected_mode
@@ -390,15 +778,32 @@ def render_learning_tools(
     # SHOW ACTIVE QUIZ
     # =====================================================
 
-    if st.session_state.active_quiz:
+    quiz_state = get_quiz_state(
+        selected_mode
+    )
 
-        render_quiz()
+    if quiz_state[
+        "active_quiz"
+    ]:
+
+        render_quiz(
+            selected_mode
+        )
+
+    # =====================================================
+    # QUIZ HISTORY
+    # =====================================================
+
+    render_quiz_history(
+        selected_mode
+    )
 
     # =====================================================
     # NOTHING TO PROCESS
     # =====================================================
 
     if not last_question or not last_answer:
+
         return
 
     st.divider()
@@ -415,16 +820,21 @@ def render_learning_tools(
     # CORRECT MODE NAME
     # =====================================================
 
-    if selected_mode == "📚 PDF Question Answering":
+    if (
+        selected_mode
+        == "📚 PDF Question Answering"
+    ):
 
-        mode = "PDF Question Answering"
+        mode = (
+            "PDF Question Answering"
+        )
 
     else:
 
         mode = "AI Tutor"
 
     # =====================================================
-    # TOOL REQUEST
+    # TOOL EXECUTION
     # =====================================================
 
     def execute_tool(
@@ -435,17 +845,12 @@ def render_learning_tools(
         # -------------------------------------------------
         # PDF EXAM ANSWER
         # -------------------------------------------------
-        #
-        # IMPORTANT:
-        # Do NOT send this back to the AI.
-        #
-        # last_answer is already the exact answer extracted
-        # from the PDF by PDF mode.
-        #
 
         if (
-            tool_name == "Exam Answer"
-            and mode == "PDF Question Answering"
+            tool_name
+            == "Exam Answer"
+            and mode
+            == "PDF Question Answering"
         ):
 
             result = last_answer
@@ -454,7 +859,9 @@ def render_learning_tools(
                 "assistant"
             ):
 
-                st.markdown(result)
+                st.markdown(
+                    result
+                )
 
             st.session_state.pdf_messages.append(
                 {
@@ -467,6 +874,10 @@ def render_learning_tools(
 
             return
 
+        # -------------------------------------------------
+        # REQUEST DATA
+        # -------------------------------------------------
+
         request_data = {
 
             "mode": mode,
@@ -475,26 +886,31 @@ def render_learning_tools(
 
             "answer": last_answer,
 
-            # IMPORTANT:
-            # Engine expects retrieved_context.
-            "retrieved_context": last_context,
+            "retrieved_context": (
+                last_context
+            ),
 
-            # Keep context key too for compatibility.
             "context": last_context,
 
             "history": current_messages,
 
-            "academic_level": settings[
-                "academic_level"
-            ],
+            "academic_level": (
+                settings[
+                    "academic_level"
+                ]
+            ),
 
-            "subject": settings[
-                "subject"
-            ],
+            "subject": (
+                settings[
+                    "subject"
+                ]
+            ),
 
-            "language": settings[
-                "language"
-            ],
+            "language": (
+                settings[
+                    "language"
+                ]
+            ),
 
             "explanation_style": (
                 explanation_style
@@ -513,8 +929,12 @@ def render_learning_tools(
                 result = run_learning_tool(
                     tool=tool_name,
                     request_data=request_data,
-                    api_key=settings["api_key"],
-                    model=settings["model"],
+                    api_key=settings[
+                        "api_key"
+                    ],
+                    model=settings[
+                        "model"
+                    ],
                 )
 
             # =================================================
@@ -523,23 +943,70 @@ def render_learning_tools(
 
             if tool_name == "Quiz":
 
-                quiz_data = extract_json_from_response(
-                    result
+                quiz_data = (
+                    extract_json_from_response(
+                        result
+                    )
                 )
 
                 validate_quiz(
                     quiz_data
                 )
 
-                clear_quiz()
+                # ---------------------------------------------
+                # Get ONLY current mode quiz state
+                # ---------------------------------------------
 
-                st.session_state.active_quiz = (
-                    quiz_data
+                quiz_state = get_quiz_state(
+                    selected_mode
                 )
 
-                st.session_state.quiz_submitted = (
-                    False
+                # ---------------------------------------------
+                # Clear old ACTIVE quiz only.
+                #
+                # History is NOT deleted.
+                # ---------------------------------------------
+
+                clear_active_quiz(
+                    selected_mode
                 )
+
+                # ---------------------------------------------
+                # Store new active quiz
+                # ---------------------------------------------
+
+                quiz_state[
+                    "active_quiz"
+                ] = quiz_data
+
+                quiz_state[
+                    "answers"
+                ] = {}
+
+                quiz_state[
+                    "score"
+                ] = 0
+
+                quiz_state[
+                    "submitted"
+                ] = False
+
+                # ---------------------------------------------
+                # Save to correct mode history
+                # ---------------------------------------------
+
+                save_quiz_to_history(
+                    selected_mode,
+                    quiz_data,
+                )
+
+                # ---------------------------------------------
+                # IMPORTANT:
+                #
+                # DO NOT add Quiz to:
+                # pdf_messages
+                # tutor_messages
+                # ---------------------------------------------
 
                 st.rerun()
 
@@ -553,32 +1020,36 @@ def render_learning_tools(
                 "assistant"
             ):
 
-                st.markdown(result)
+                st.markdown(
+                    result
+                )
 
             message = {
                 "role": "assistant",
                 "content": result,
             }
 
-           
-            if tool_name != "Quiz":
+            # -------------------------------------------------
+            # Save normal learning-tool response
+            # to the correct conversation.
+            #
+            # Quiz is intentionally excluded above.
+            # -------------------------------------------------
 
-                message = {
-                    "role": "assistant",
-                    "content": result,
-                }
-            
-                if mode == "PDF Question Answering":
-            
-                    st.session_state.pdf_messages.append(
-                        message
-                    )
-            
-                else:
-            
-                    st.session_state.tutor_messages.append(
-                        message
-                    )
+            if (
+                mode
+                == "PDF Question Answering"
+            ):
+
+                st.session_state.pdf_messages.append(
+                    message
+                )
+
+            else:
+
+                st.session_state.tutor_messages.append(
+                    message
+                )
 
             st.rerun()
 
