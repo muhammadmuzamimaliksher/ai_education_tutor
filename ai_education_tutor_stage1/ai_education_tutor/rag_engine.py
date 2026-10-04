@@ -14,7 +14,7 @@ EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 # Lower value  = more permissive retrieval
 #
 # Start with 0.35 and test with your own PDFs.
-MIN_RELEVANCE_SCORE = 0.35
+MIN_RELEVANCE_SCORE = 0.20
 
 
 # ============================================================
