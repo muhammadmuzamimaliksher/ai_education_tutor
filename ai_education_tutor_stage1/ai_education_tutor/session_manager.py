@@ -9,7 +9,27 @@ def initialize_session_state():
     """
     Initialize all Streamlit session-state variables.
     """
-
+    # =====================================================
+    # QUIZ SESSION
+    # =====================================================
+    
+    if "quiz_history" not in st.session_state:
+        st.session_state.quiz_history = []
+    
+    if "active_quiz" not in st.session_state:
+        st.session_state.active_quiz = None
+    
+    if "quiz_answers" not in st.session_state:
+        st.session_state.quiz_answers = {}
+    
+    if "quiz_score" not in st.session_state:
+        st.session_state.quiz_score = 0
+    
+    if "quiz_submitted" not in st.session_state:
+        st.session_state.quiz_submitted = False
+    
+    if "quiz_source_mode" not in st.session_state:
+        st.session_state.quiz_source_mode = ""
     # =====================================================
     # RAG / PDF STATE
     # =====================================================
