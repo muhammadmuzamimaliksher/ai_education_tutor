@@ -1,11 +1,9 @@
-# =========================================================
-# PDF QUESTION ANSWERING MODE
-# =========================================================
+import hashlib
 
 import streamlit as st
 
 from document_processor import (
-    extract_text_from_pdf,
+    extract_pages_from_pdf,
     split_text,
 )
 
@@ -13,6 +11,7 @@ from rag_engine import (
     load_embedding_model,
     build_knowledge_base,
     search_knowledge_base,
+    has_relevant_information,
     get_best_relevance_score,
 )
 
@@ -23,13 +22,148 @@ from session_manager import (
 )
 
 
-def render_pdf_mode(settings):
+# =========================================================
+# PDF FALLBACK
+# =========================================================
 
-    st.header("📚 PDF Question Answering")
+PDF_FALLBACK = (
+    "I couldn't find this information in the provided PDF."
+)
+
+
+# =========================================================
+# FILE HASH
+# =========================================================
+
+def get_file_hash(uploaded_file):
+    """
+    Create a unique hash for the uploaded PDF.
+
+    This prevents a problem where the user uploads
+    a different PDF with the same filename.
+    """
+
+    file_bytes = uploaded_file.getvalue()
+
+    return hashlib.sha256(
+        file_bytes
+    ).hexdigest()
+
+
+# =========================================================
+# VERBATIM SOURCE EXTRACTION
+# =========================================================
+
+def extract_verbatim_answer(
+    question,
+    search_results,
+):
+    """
+    Return exact text from retrieved PDF passages.
+
+    IMPORTANT:
+
+    This function does NOT ask an AI model to rewrite
+    the PDF.
+
+    The returned wording comes directly from the
+    retrieved PDF chunks.
+    """
+
+    if not search_results:
+        return PDF_FALLBACK
+
+    # -----------------------------------------------------
+    # Current safe strategy:
+    #
+    # Return the strongest relevant PDF passage.
+    #
+    # This guarantees that the wording is taken directly
+    # from the PDF source.
+    # -----------------------------------------------------
+
+    best_result = search_results[0]
+
+    text = best_result.get(
+        "text",
+        "",
+    )
+
+    if not text:
+        return PDF_FALLBACK
+
+    page_number = best_result.get(
+        "page_number"
+    )
+
+    if page_number is not None:
+
+        return (
+            f"**Source — PDF Page {page_number}**\n\n"
+            f"{text}"
+        )
+
+    return text
+
+
+# =========================================================
+# DISPLAY SEARCH INFORMATION
+# =========================================================
+
+def display_pdf_source_info(
+    search_results
+):
+    """
+    Display source information for the retrieved
+    PDF passage.
+    """
+
+    if not search_results:
+        return
+
+    best_result = search_results[0]
+
+    score = best_result.get(
+        "score",
+        0.0,
+    )
+
+    page_number = best_result.get(
+        "page_number"
+    )
+
+    if page_number is not None:
+
+        st.caption(
+            f"📄 Source: PDF Page {page_number} "
+            f"| Relevance: {score:.3f}"
+        )
+
+    else:
+
+        st.caption(
+            f"📄 Source: PDF "
+            f"| Relevance: {score:.3f}"
+        )
+
+
+# =========================================================
+# MAIN PDF MODE
+# =========================================================
+
+def render_pdf_mode(settings):
+    """
+    Render strict PDF Question Answering mode.
+    """
+
+    st.header(
+        "📚 PDF Question Answering"
+    )
 
     st.info(
-        "Upload your study material and ask questions "
-        "based on the PDF."
+        "PDF mode uses only the uploaded PDF. "
+        "Final answers are extracted from the PDF "
+        "source text instead of being rewritten by AI."
     )
 
 
@@ -38,147 +172,191 @@ def render_pdf_mode(settings):
     # =====================================================
 
     uploaded_file = st.file_uploader(
-        "📄 Upload Study PDF",
+        "Upload your study PDF",
         type=["pdf"],
+        key="pdf_uploader",
     )
 
 
     # =====================================================
-    # PROCESS PDF
+    # NO PDF
     # =====================================================
 
-    if uploaded_file is not None:
+    if uploaded_file is None:
 
-        if (
-            st.session_state.uploaded_file_name
-            != uploaded_file.name
-        ):
+        if st.session_state.uploaded_file_name:
 
-            with st.spinner(
-                "📖 Processing PDF..."
+            st.caption(
+                f"Current PDF: "
+                f"{st.session_state.uploaded_file_name}"
+            )
+
+        else:
+
+            st.warning(
+                "Please upload a PDF to use "
+                "PDF Question Answering."
+            )
+
+        # -------------------------------------------------
+        # DISPLAY EXISTING CONVERSATION
+        # -------------------------------------------------
+
+        for message in st.session_state.pdf_messages:
+
+            with st.chat_message(
+                message["role"]
             ):
 
-                try:
+                st.markdown(
+                    message["content"]
+                )
 
-                    # -----------------------------------------
-                    # EXTRACT TEXT
-                    # -----------------------------------------
+        return
 
-                    document_text = (
-                        extract_text_from_pdf(
-                            uploaded_file
-                        )
+
+    # =====================================================
+    # FILE HASH
+    # =====================================================
+
+    current_file_hash = get_file_hash(
+        uploaded_file
+    )
+
+    previous_file_hash = st.session_state.get(
+        "pdf_file_hash",
+        "",
+    )
+
+
+    # =====================================================
+    # PROCESS NEW PDF
+    # =====================================================
+
+    if (
+        current_file_hash
+        != previous_file_hash
+    ):
+
+        with st.spinner(
+            "Processing PDF..."
+        ):
+
+            try:
+
+                # -----------------------------------------
+                # STEP 1 — EXTRACT PAGES
+                # -----------------------------------------
+
+                pages = extract_pages_from_pdf(
+                    uploaded_file
+                )
+
+                # -----------------------------------------
+                # STEP 2 — CREATE PAGE-AWARE CHUNKS
+                # -----------------------------------------
+
+                chunks = split_text(
+                    pages,
+                    chunk_size=800,
+                    chunk_overlap=100,
+                )
+
+                if not chunks:
+                    raise ValueError(
+                        "No readable text chunks were created."
                     )
 
+                # -----------------------------------------
+                # STEP 3 — LOAD EMBEDDING MODEL
+                # -----------------------------------------
 
-                    # -----------------------------------------
-                    # CHUNK TEXT
-                    # -----------------------------------------
+                if (
+                    st.session_state.embedding_model
+                    is None
+                ):
 
-                    chunks = split_text(
-                        document_text,
-                        chunk_size=800,
-                        chunk_overlap=100,
+                    st.session_state.embedding_model = (
+                        load_embedding_model()
                     )
 
+                embedding_model = (
+                    st.session_state.embedding_model
+                )
 
-                    if not chunks:
+                # -----------------------------------------
+                # STEP 4 — BUILD KNOWLEDGE BASE
+                # -----------------------------------------
 
-                        raise ValueError(
-                            "No readable text was found."
-                        )
-
-
-                    # -----------------------------------------
-                    # EMBEDDING MODEL
-                    # -----------------------------------------
-
-                    if (
-                        st.session_state.embedding_model
-                        is None
-                    ):
-
-                        st.session_state.embedding_model = (
-                            load_embedding_model()
-                        )
-
-
-                    # -----------------------------------------
-                    # BUILD KNOWLEDGE BASE
-                    # -----------------------------------------
-
-                    knowledge_base = (
-                        build_knowledge_base(
-                            chunks,
-                            st.session_state.embedding_model,
-                        )
+                knowledge_base = (
+                    build_knowledge_base(
+                        chunks,
+                        embedding_model,
                     )
+                )
 
+                # -----------------------------------------
+                # STEP 5 — SAVE STATE
+                # -----------------------------------------
 
-                    # -----------------------------------------
-                    # SAVE RAG DATA
-                    # -----------------------------------------
+                st.session_state.rag_index = (
+                    knowledge_base
+                )
 
-                    st.session_state.rag_index = (
-                        knowledge_base
-                    )
+                st.session_state.document_chunks = (
+                    chunks
+                )
 
-                    st.session_state.document_chunks = (
-                        chunks
-                    )
+                st.session_state.rag_ready = True
 
-                    st.session_state.rag_ready = True
+                st.session_state.uploaded_file_name = (
+                    uploaded_file.name
+                )
 
-                    st.session_state.uploaded_file_name = (
-                        uploaded_file.name
-                    )
+                st.session_state.pdf_file_hash = (
+                    current_file_hash
+                )
 
+                # -----------------------------------------
+                # IMPORTANT:
+                # Clear ONLY PDF conversation.
+                # AI Tutor memory remains untouched.
+                # -----------------------------------------
 
-                    # -----------------------------------------
-                    # CLEAR ONLY PDF MEMORY
-                    # -----------------------------------------
+                reset_pdf_conversation()
 
-                    reset_pdf_conversation()
+                st.success(
+                    f"PDF processed successfully. "
+                    f"{len(pages)} pages and "
+                    f"{len(chunks)} searchable chunks created."
+                )
 
+            except Exception as error:
 
-                    st.success(
-                        f"✅ PDF processed successfully."
-                    )
+                st.error(
+                    f"PDF processing failed: {error}"
+                )
 
-                    st.info(
-                        f"📄 {len(chunks)} chunks created."
-                    )
-
-
-                except Exception as error:
-
-                    st.session_state.rag_ready = False
-
-                    st.error(
-                        f"❌ PDF processing failed: {error}"
-                    )
+                return
 
 
     # =====================================================
     # PDF STATUS
     # =====================================================
 
-    if st.session_state.rag_ready:
+    st.caption(
+        f"📄 PDF: "
+        f"{st.session_state.uploaded_file_name}"
+    )
 
-        st.success(
-            f"📄 Active PDF: "
-            f"{st.session_state.uploaded_file_name}"
-        )
-
-    else:
-
-        st.warning(
-            "Please upload a PDF before asking questions."
-        )
+    st.caption(
+        f"🔎 Searchable chunks: "
+        f"{len(st.session_state.document_chunks)}"
+    )
 
 
     # =====================================================
-    # DISPLAY PDF CONVERSATION
+    # DISPLAY CONVERSATION
     # =====================================================
 
     for message in st.session_state.pdf_messages:
@@ -200,135 +378,12 @@ def render_pdf_mode(settings):
         "Ask a question about your PDF..."
     )
 
-
-    if question:
-
-        process_pdf_question(
-            question,
-            settings,
-        )
-
-
-# =========================================================
-# PROCESS PDF QUESTION
-# =========================================================
-
-def process_pdf_question(
-    question,
-    settings,
-):
-
-    if not settings["api_key"]:
-
-        st.error(
-            "GROQ_API_KEY is not configured."
-        )
-
-        return
-
-
-    if not st.session_state.rag_ready:
-
-        st.warning(
-            "Please upload and process a PDF first."
-        )
-
+    if not question:
         return
 
 
     # =====================================================
-    # RAG SEARCH
-    # =====================================================
-
-    try:
-
-        search_results = search_knowledge_base(
-            query=question,
-            embedding_model=(
-                st.session_state.embedding_model
-            ),
-            knowledge_base=(
-                st.session_state.rag_index
-            ),
-            top_k=4,
-        )
-
-
-    except Exception as error:
-
-        st.error(
-            f"❌ RAG search failed: {error}"
-        )
-
-        return
-
-
-    # =====================================================
-    # NO RELEVANT INFORMATION
-    # =====================================================
-
-    if not search_results:
-
-        answer = (
-            "I couldn't find enough information in the "
-            "provided study material to answer this confidently. "
-            "Please upload a relevant document or provide more context."
-        )
-
-        st.session_state.pdf_messages.append(
-            {
-                "role": "user",
-                "content": question,
-            }
-        )
-
-        st.session_state.pdf_messages.append(
-            {
-                "role": "assistant",
-                "content": answer,
-            }
-        )
-
-        st.session_state.pdf_last_question = question
-
-        st.session_state.pdf_last_answer = answer
-
-        st.session_state.pdf_last_context = ""
-
-        st.rerun()
-
-        return
-
-
-    # =====================================================
-    # BUILD CONTEXT
-    # =====================================================
-
-    context_parts = []
-
-    for index, result in enumerate(
-        search_results,
-        start=1,
-    ):
-
-        context_parts.append(
-            f"[Retrieved Section {index}]\n"
-            f"{result['text']}"
-        )
-
-
-    retrieved_context = "\n\n".join(
-        context_parts
-    )
-
-
-    best_score = get_best_relevance_score(
-        search_results
-    )
-
-
-    # =====================================================
-    # SAVE USER MESSAGE
+    # SAVE USER QUESTION
     # =====================================================
 
     st.session_state.pdf_messages.append(
@@ -338,103 +393,161 @@ def process_pdf_question(
         }
     )
 
-
-    # =====================================================
-    # REQUEST DATA
-    # =====================================================
-
-    request_data = {
-
-        "mode": "pdf",
-
-        "question": question,
-
-        "topic": settings["subject"],
-
-        "subject": settings["subject"],
-
-        "academic_level": settings[
-            "academic_level"
-        ],
-
-        "language": settings["language"],
-
-        "explanation_style": settings[
-            "explanation_style"
-        ],
-
-        "context": retrieved_context,
-
-        "history": (
-            st.session_state.pdf_messages[:-1]
-        ),
-    }
+    with st.chat_message("user"):
+        st.markdown(question)
 
 
     # =====================================================
-    # AI PIPELINE
+    # RAG KNOWLEDGE BASE CHECK
     # =====================================================
 
-    with st.chat_message("assistant"):
+    if not st.session_state.rag_ready:
 
-        with st.spinner(
-            "🧠 Tutor → Research → Evaluator..."
-        ):
+        answer = PDF_FALLBACK
 
-            try:
+        st.session_state.pdf_messages.append(
+            {
+                "role": "assistant",
+                "content": answer,
+            }
+        )
 
-                result = run_ai_tutor(
-                    request_data=request_data,
-                    api_key=settings["api_key"],
-                    model=settings["model"],
-                )
+        with st.chat_message("assistant"):
+            st.markdown(answer)
 
-
-                if isinstance(result, dict):
-
-                    answer = result.get(
-                        "answer",
-                        result.get(
-                            "final_answer",
-                            "",
-                        ),
-                    )
-
-                else:
-
-                    answer = str(result)
+        return
 
 
-                if not answer:
+    # =====================================================
+    # SEARCH PDF
+    # =====================================================
 
-                    answer = (
-                        "The AI did not return a usable answer."
-                    )
+    with st.spinner(
+        "Searching the PDF..."
+    ):
 
+        try:
 
-                st.markdown(answer)
+            search_results = search_knowledge_base(
+                query=question,
+                embedding_model=(
+                    st.session_state.embedding_model
+                ),
+                knowledge_base=(
+                    st.session_state.rag_index
+                ),
+                top_k=4,
+                min_score=0.35,
+            )
 
+        except Exception as error:
 
-            except Exception as error:
+            answer = (
+                f"PDF search failed: {error}"
+            )
 
-                answer = (
-                    f"❌ AI processing failed: {error}"
-                )
+            st.session_state.pdf_messages.append(
+                {
+                    "role": "assistant",
+                    "content": answer,
+                }
+            )
 
+            with st.chat_message("assistant"):
                 st.error(answer)
 
+            return
+
 
     # =====================================================
-    # SAVE ASSISTANT RESPONSE
+    # RELEVANCE CHECK
     # =====================================================
 
-    st.session_state.pdf_messages.append(
-        {
-            "role": "assistant",
-            "content": answer,
-        }
+    if not has_relevant_information(
+        search_results
+    ):
+
+        answer = PDF_FALLBACK
+
+        st.session_state.pdf_messages.append(
+            {
+                "role": "assistant",
+                "content": answer,
+            }
+        )
+
+        with st.chat_message("assistant"):
+            st.markdown(answer)
+
+        st.session_state.pdf_last_question = (
+            question
+        )
+
+        st.session_state.pdf_last_answer = (
+            answer
+        )
+
+        st.session_state.pdf_last_context = ""
+
+        return
+
+
+    # =====================================================
+    # BEST SCORE
+    # =====================================================
+
+    best_score = get_best_relevance_score(
+        search_results
     )
 
+
+    # =====================================================
+    # VERBATIM ANSWER
+    # =====================================================
+
+    answer = extract_verbatim_answer(
+        question,
+        search_results,
+    )
+
+
+    # =====================================================
+    # SAVE CONTEXT
+    # =====================================================
+
+    context_parts = []
+
+    for result in search_results:
+
+        page_number = result.get(
+            "page_number"
+        )
+
+        text = result.get(
+            "text",
+            "",
+        )
+
+        if page_number is not None:
+
+            context_parts.append(
+                f"[PDF Page {page_number}]\n{text}"
+            )
+
+        else:
+
+            context_parts.append(
+                text
+            )
+
+    retrieved_context = "\n\n".join(
+        context_parts
+    )
+
+
+    # =====================================================
+    # SAVE LAST PDF STATE
+    # =====================================================
 
     st.session_state.pdf_last_question = (
         question
@@ -449,10 +562,31 @@ def process_pdf_question(
     )
 
 
-    st.caption(
-        f"🔎 Retrieved sections: "
-        f"{len(search_results)} | "
-        f"Best relevance: {best_score:.2f}"
+    # =====================================================
+    # SAVE ASSISTANT MESSAGE
+    # =====================================================
+
+    st.session_state.pdf_messages.append(
+        {
+            "role": "assistant",
+            "content": answer,
+        }
     )
 
-    st.rerun()
+
+    # =====================================================
+    # DISPLAY ANSWER
+    # =====================================================
+
+    with st.chat_message("assistant"):
+
+        st.markdown(answer)
+
+        display_pdf_source_info(
+            search_results
+        )
+
+        st.caption(
+            f"🔎 Best relevance score: "
+            f"{best_score:.3f}"
+        )
