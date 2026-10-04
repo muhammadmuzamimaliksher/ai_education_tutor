@@ -334,10 +334,15 @@ def render_quiz():
                     f"Correct answer: **{correct_answer}**"
                 )
 
-            st.write(
-                f"**Explanation:** "
-                f"{question['explanation']}"
-            )
+            explanation = question.get(
+                "explanation",
+                ""
+            ).strip()
+            
+            if explanation:
+                st.write(
+                    f"**Explanation:** {explanation}"
+                )
 
             st.divider()
 
