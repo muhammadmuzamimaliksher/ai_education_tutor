@@ -147,3 +147,27 @@ def get_current_memory(selected_mode):
         "last_answer": st.session_state.tutor_last_answer,
         "last_context": "",
     }
+def clear_quiz_session():
+
+    st.session_state.quiz_history = []
+
+    st.session_state.active_quiz = None
+
+    st.session_state.quiz_answers = {}
+
+    st.session_state.quiz_score = 0
+
+    st.session_state.quiz_submitted = False
+
+    st.session_state.quiz_source_mode = ""
+    
+def get_quiz_memory():
+
+    return {
+        "messages": st.session_state.quiz_history,
+        "active_quiz": st.session_state.active_quiz,
+        "answers": st.session_state.quiz_answers,
+        "score": st.session_state.quiz_score,
+        "submitted": st.session_state.quiz_submitted,
+        "source_mode": st.session_state.quiz_source_mode,
+    }
