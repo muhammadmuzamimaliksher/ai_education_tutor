@@ -14,17 +14,16 @@ POLICY_FILE = os.path.join(
 
 
 def load_rag_policy():
-    """Load the anti-hallucination policy PDF."""
+    """Load the anti-hallucination policy."""
 
     if not os.path.exists(POLICY_FILE):
         return """
-        Follow these rules:
+        Rules:
         1. Do not invent facts.
         2. For PDF questions, use only retrieved study material.
-        3. If the study material does not contain enough information,
-           clearly say that the information is unavailable.
-        4. Do not fabricate citations, page numbers, quotations,
-           references, URLs, statistics, or facts.
+        3. If the study material is insufficient, say so clearly.
+        4. Never fabricate citations, page numbers, references,
+           quotations, URLs, statistics, or facts.
         """
 
     try:
@@ -114,6 +113,40 @@ def call_groq(
 
 
 # =========================================================
+# FORMAT CONVERSATION HISTORY
+# =========================================================
+
+def format_history(history, max_messages=8):
+    """
+    Convert Streamlit conversation history into
+    a compact text format.
+    """
+
+    if not history:
+        return "No previous conversation."
+
+    recent_history = history[-max_messages:]
+
+    formatted = []
+
+    for message in recent_history:
+
+        role = message.get("role", "user")
+        content = message.get("content", "")
+
+        if role == "user":
+            label = "Student"
+        else:
+            label = "AI Tutor"
+
+        formatted.append(
+            f"{label}: {content}"
+        )
+
+    return "\n\n".join(formatted)
+
+
+# =========================================================
 # TUTOR AGENT
 # =========================================================
 
@@ -125,9 +158,10 @@ def tutor_agent(
     """
     Tutor Agent.
 
-    Works in both:
-    - PDF Q&A mode
-    - General AI Tutor mode
+    Supports:
+    - PDF Question Answering
+    - General AI Tutor
+    - Conversation memory
     """
 
     mode = request_data.get(
@@ -165,9 +199,17 @@ def tutor_agent(
         "",
     )
 
-    # -----------------------------------------------------
+    history = request_data.get(
+        "history",
+        [],
+    )
+
+    conversation = format_history(history)
+
+
+    # =====================================================
     # PDF MODE
-    # -----------------------------------------------------
+    # =====================================================
 
     if mode == "PDF Question Answering":
 
@@ -175,24 +217,30 @@ def tutor_agent(
 You are the Tutor Agent in a grounded educational
 question-answering system.
 
-The user uploaded a study document.
+The student has uploaded a study document.
 
-You MUST answer using the retrieved study material
-provided below.
+You MUST use the retrieved study material as the
+primary source.
 
 RAG POLICY:
 
 {RAG_POLICY}
 
-IMPORTANT RULES:
+STRICT RULES:
 
-- Use the retrieved study material as the primary source.
 - Do not invent information.
 - Do not add unsupported facts.
-- Do not fabricate citations or page numbers.
-- Explain the material clearly.
-- If the retrieved material does not contain enough
-  information, say so instead of guessing.
+- Do not fabricate citations.
+- Do not fabricate page numbers.
+- Do not fabricate quotations.
+- Do not fabricate references.
+- Do not fabricate URLs.
+- If the retrieved material is insufficient,
+  clearly say so.
+- Use previous conversation only to understand
+  context and references.
+- The study material remains the authority for
+  document-based answers.
 
 Student level:
 {academic_level}
@@ -208,7 +256,11 @@ Explanation style:
 """
 
         user_prompt = f"""
-Student Question:
+Previous Conversation:
+
+{conversation}
+
+Current Student Question:
 
 {question}
 
@@ -216,24 +268,26 @@ Retrieved Study Material:
 
 {retrieved_context}
 
-Provide a clear educational answer based on the
+Answer the current question clearly using the
 retrieved study material.
 """
 
-    # -----------------------------------------------------
+
+    # =====================================================
     # GENERAL AI TUTOR MODE
-    # -----------------------------------------------------
+    # =====================================================
 
     else:
 
         system_prompt = f"""
 You are an expert AI Education Tutor.
 
-Your job is to help students understand academic
-and educational topics.
+You help students understand academic and
+educational topics.
 
-You may answer general educational questions in
-this mode.
+This is GENERAL AI TUTOR mode.
+
+The student does not need to upload a PDF.
 
 Student level:
 {academic_level}
@@ -249,22 +303,26 @@ Explanation style:
 
 Teaching rules:
 
-- Explain concepts clearly.
-- Start with the direct answer.
+- Directly answer the student's question.
 - Use simple language when appropriate.
-- Give examples when useful.
 - Break difficult concepts into steps.
+- Give examples when useful.
 - Use headings and bullet points when helpful.
-- Do not deliberately make up facts.
-- If you are uncertain about a fact, be transparent.
+- Remember the recent conversation context.
+- Do not deliberately invent facts.
+- Be transparent when information is uncertain.
 """
 
         user_prompt = f"""
-Student Question:
+Previous Conversation:
+
+{conversation}
+
+Current Student Question:
 
 {question}
 
-Provide a helpful educational explanation.
+Provide a helpful educational answer.
 """
 
     return call_groq(
@@ -286,7 +344,7 @@ def research_agent(
     tutor_answer,
 ):
     """
-    Research Agent checks the Tutor Agent response.
+    Research Agent verifies the Tutor Agent response.
     """
 
     mode = request_data.get(
@@ -304,14 +362,18 @@ def research_agent(
         "",
     )
 
+
+    # =====================================================
     # PDF MODE
+    # =====================================================
+
     if mode == "PDF Question Answering":
 
         system_prompt = f"""
 You are the Research Agent.
 
-Your responsibility is to verify the Tutor Agent's
-answer against the retrieved study material.
+Verify the Tutor Agent's answer against the
+retrieved study material.
 
 RAG POLICY:
 
@@ -319,15 +381,15 @@ RAG POLICY:
 
 Rules:
 
-- Check whether important claims are supported.
-- Do not introduce new unsupported information.
+- Check important claims against the material.
+- Do not introduce unsupported information.
 - Do not fabricate references.
-- Remove or identify unsupported claims.
-- If the material is insufficient, say so clearly.
+- Identify unsupported claims.
+- Prefer transparency when evidence is insufficient.
 """
 
         user_prompt = f"""
-Question:
+Student Question:
 
 {question}
 
@@ -339,27 +401,31 @@ Tutor Agent Answer:
 
 {tutor_answer}
 
-Review the answer for grounding and factual support.
+Verify the answer against the study material.
 
-Return a concise verification/research report.
+Return a concise verification report.
 """
 
+
+    # =====================================================
     # GENERAL MODE
+    # =====================================================
+
     else:
 
         system_prompt = """
 You are the Research Agent in an educational
 multi-agent AI tutor.
 
-Review the Tutor Agent's answer.
+Review the Tutor Agent answer.
 
 Check:
 
 - Logical correctness
 - Educational usefulness
 - Internal consistency
-- Potential unsupported claims
-- Whether the answer actually addresses the question
+- Important factual problems
+- Whether the question was answered
 
 Do not unnecessarily rewrite the answer.
 
@@ -375,7 +441,7 @@ Tutor Agent Answer:
 
 {tutor_answer}
 
-Review this answer and identify any important
+Review this answer and identify important
 problems or improvements.
 """
 
@@ -399,7 +465,7 @@ def evaluator_agent(
     research_report,
 ):
     """
-    Evaluator Agent produces the final answer.
+    Evaluator Agent creates final answer.
     """
 
     mode = request_data.get(
@@ -432,17 +498,17 @@ def evaluator_agent(
         "",
     )
 
-    # -----------------------------------------------------
+
+    # =====================================================
     # PDF MODE
-    # -----------------------------------------------------
+    # =====================================================
 
     if mode == "PDF Question Answering":
 
         system_prompt = f"""
 You are the final Evaluator Agent.
 
-Your job is to produce the final answer for the
-student.
+Create the final answer for the student.
 
 RAG POLICY:
 
@@ -450,22 +516,15 @@ RAG POLICY:
 
 STRICT PDF RULES:
 
-1. The answer must be grounded in the retrieved
-   study material.
-
-2. Do not introduce unsupported facts.
-
-3. Do not invent citations, references, page numbers,
-   quotations, statistics, or URLs.
-
-4. If the retrieved study material is insufficient,
-   clearly state that.
-
-5. Do not pretend that information exists in the
-   document when it does not.
-
-6. Make the final answer educational and easy to
-   understand.
+- Ground the answer in the retrieved material.
+- Remove unsupported claims.
+- Do not invent information.
+- Do not invent citations.
+- Do not invent page numbers.
+- Do not invent references.
+- Do not invent URLs.
+- If evidence is insufficient, say so.
+- Make the final answer easy to understand.
 
 Student level:
 {academic_level}
@@ -494,18 +553,19 @@ Research Agent Report:
 
 {research_report}
 
-Create the final grounded answer.
+Create the final grounded educational answer.
 """
 
-    # -----------------------------------------------------
-    # GENERAL AI TUTOR MODE
-    # -----------------------------------------------------
+
+    # =====================================================
+    # GENERAL MODE
+    # =====================================================
 
     else:
 
         system_prompt = f"""
-You are the final Evaluator Agent of an AI Education
-Tutor.
+You are the final Evaluator Agent of an
+AI Education Tutor.
 
 Create the best final educational response.
 
@@ -520,13 +580,11 @@ Explanation style:
 
 Requirements:
 
-- Directly answer the student's question.
-- Make the explanation clear.
+- Directly answer the question.
 - Correct important issues identified by Research.
-- Do not include unnecessary internal agent discussion.
-- Do not mention "Tutor Agent", "Research Agent",
-  or "Evaluator Agent" in the final answer.
-- Use examples or steps when useful.
+- Keep the answer educational and clear.
+- Use examples when useful.
+- Do not mention the internal agents.
 """
 
         user_prompt = f"""
@@ -554,7 +612,7 @@ Create the final student-friendly answer.
 
 
 # =========================================================
-# MAIN AI TUTOR PIPELINE
+# MAIN AI PIPELINE
 # =========================================================
 
 def run_ai_tutor(
@@ -563,7 +621,7 @@ def run_ai_tutor(
     model,
 ):
     """
-    Main multi-agent workflow:
+    Main workflow:
 
     Tutor → Research → Evaluator
     """
@@ -592,3 +650,216 @@ def run_ai_tutor(
     )
 
     return final_answer
+
+
+# =========================================================
+# LEARNING TOOLS
+# =========================================================
+
+def run_learning_tool(
+    tool,
+    request_data,
+    api_key,
+    model,
+):
+    """
+    Generate learning content:
+
+    - Explain Again
+    - Explain Simply
+    - Give Example
+    - Exam Answer
+    - Summary
+    - Quiz
+    """
+
+    client = create_client(api_key)
+
+    mode = request_data.get(
+        "mode",
+        "AI Tutor",
+    )
+
+    question = request_data.get(
+        "question",
+        "",
+    )
+
+    academic_level = request_data.get(
+        "academic_level",
+        "General",
+    )
+
+    language = request_data.get(
+        "language",
+        "English",
+    )
+
+    retrieved_context = request_data.get(
+        "retrieved_context",
+        "",
+    )
+
+    history = format_history(
+        request_data.get(
+            "history",
+            [],
+        )
+    )
+
+
+    # =====================================================
+    # TOOL INSTRUCTIONS
+    # =====================================================
+
+    tool_instructions = {
+
+        "Explain Again": """
+Explain the topic again using different wording.
+Make the explanation clearer than before.
+""",
+
+        "Explain Simply": """
+Explain the topic as simply as possible.
+Imagine you are teaching a beginner.
+Avoid unnecessary technical terminology.
+""",
+
+        "Give Example": """
+Explain the concept using practical,
+easy-to-understand examples.
+""",
+
+        "Exam Answer": """
+Create an exam-ready answer.
+Use a clear definition, explanation,
+important points, and examples where appropriate.
+""",
+
+        "Summary": """
+Create concise study notes.
+Include:
+- Main concept
+- Important points
+- Key definitions
+- Important facts
+- Useful examples
+""",
+
+        "Quiz": """
+Create a short educational quiz.
+
+Include:
+1. Five multiple-choice questions.
+2. Four options for each question.
+3. Clearly identify the correct answer.
+4. Add a short explanation for each answer.
+""",
+    }
+
+
+    instruction = tool_instructions.get(
+        tool,
+        "Provide a useful educational response."
+    )
+
+
+    # =====================================================
+    # PDF MODE
+    # =====================================================
+
+    if mode == "PDF Question Answering":
+
+        system_prompt = f"""
+You are an educational learning assistant.
+
+The student is working from an uploaded PDF.
+
+RAG POLICY:
+
+{RAG_POLICY}
+
+STRICT RULES:
+
+- Use only the retrieved study material.
+- Do not introduce unsupported information.
+- Do not fabricate facts.
+- Do not fabricate citations or page numbers.
+- Do not fabricate references.
+- If the material is insufficient, say so.
+
+Student level:
+{academic_level}
+
+Language:
+{language}
+
+Task:
+
+{instruction}
+"""
+
+        user_prompt = f"""
+Recent Conversation:
+
+{history}
+
+Current Topic / Question:
+
+{question}
+
+Retrieved Study Material:
+
+{retrieved_context}
+
+Perform the requested learning task using
+the study material.
+"""
+
+
+    # =====================================================
+    # GENERAL AI TUTOR MODE
+    # =====================================================
+
+    else:
+
+        system_prompt = f"""
+You are an expert AI Education Tutor.
+
+Student level:
+{academic_level}
+
+Language:
+{language}
+
+Task:
+
+{instruction}
+
+Teaching rules:
+
+- Be educational.
+- Be clear.
+- Use appropriate examples.
+- Organize the response well.
+- Do not mention internal agents.
+"""
+
+        user_prompt = f"""
+Recent Conversation:
+
+{history}
+
+Current Topic / Question:
+
+{question}
+
+Perform the requested learning task.
+"""
+
+    return call_groq(
+        client,
+        model,
+        system_prompt,
+        user_prompt,
+    )
