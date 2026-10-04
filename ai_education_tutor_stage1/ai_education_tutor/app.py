@@ -1,174 +1,183 @@
 import streamlit as st
-from groq import Groq
 
-from config import APP_NAME, GROQ_API_KEY, GROQ_MODEL
+from config import APP_TITLE, GROQ_API_KEY, DEFAULT_MODEL, AVAILABLE_MODELS
+from ai_engine import run_ai_tutor
 
 
+# ---------------------------------------------------------
+# Page configuration
+# ---------------------------------------------------------
 st.set_page_config(
-    page_title=APP_NAME,
+    page_title=APP_TITLE,
     page_icon="🎓",
     layout="wide",
 )
 
 
-@st.cache_resource
-def get_groq_client():
-    if not GROQ_API_KEY:
-        return None
-    return Groq(api_key=GROQ_API_KEY)
-
-
-def ask_groq(
-    client,
-    question: str,
-    academic_level: str,
-    subject: str,
-    language: str,
-    explanation_style: str,
-) -> str:
-    system_prompt = f"""
-You are an AI Education Tutor.
-
-Student academic level: {academic_level}
-Subject: {subject}
-Preferred language: {language}
-Explanation style: {explanation_style}
-
-Your job is to teach, not merely give a short answer.
-Adapt vocabulary, depth, examples, and reasoning to the student's academic level.
-For mathematics and technical problems, show the reasoning step by step.
-Use examples when they improve understanding.
-Do not intentionally invent facts. If information is uncertain, clearly say so.
-For advanced university or PhD questions, provide appropriate technical depth.
-Do not claim 100% accuracy or certainty.
-"""
-
-    try:
-        response = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question},
-            ],
-            temperature=0.2,
-            max_tokens=4096,
-        )
-        return response.choices[0].message.content.strip()
-
-    except Exception as e:
-        error_text = str(e)
-
-        if "401" in error_text or "invalid_api_key" in error_text.lower():
-            return "❌ Invalid Groq API key. Check GROQ_API_KEY in Streamlit Secrets."
-
-        if "429" in error_text:
-            return "⚠️ Groq rate limit reached. Please wait a moment and try again."
-
-        if "404" in error_text or "model" in error_text.lower():
-            return (
-                f"❌ Groq model error. Current model is `{GROQ_MODEL}`. "
-                "Check that this model is available to your Groq account."
-            )
-
-        return f"❌ An error occurred while generating the answer: {error_text}"
-
-
+# ---------------------------------------------------------
+# Header
+# ---------------------------------------------------------
 st.title("🎓 AI Education / AI Tutor")
-st.caption("Ask. Understand. Practice. Learn.")
+st.write(
+    "An AI-powered learning assistant designed to explain academic "
+    "concepts according to the student's educational level."
+)
 
+
+# ---------------------------------------------------------
+# API Key Check
+# ---------------------------------------------------------
+if not GROQ_API_KEY:
+    st.error(
+        "❌ GROQ_API_KEY is not configured.\n\n"
+        "Add GROQ_API_KEY to Streamlit Secrets and reboot the app."
+    )
+    st.stop()
+
+
+# ---------------------------------------------------------
+# Sidebar
+# ---------------------------------------------------------
 with st.sidebar:
-    st.header("Learning Settings")
+    st.header("⚙️ Learning Settings")
 
     academic_level = st.selectbox(
-        "Academic Level",
+        "🎓 Academic Level",
         [
-            "Grade 1–5",
-            "Grade 6–8",
-            "Grade 9–10",
-            "Grade 11–12",
-            "Undergraduate",
-            "Master's",
+            "Grade 1-5",
+            "Grade 6-8",
+            "Grade 9-10",
+            "Grade 11-12",
+            "Bachelor",
+            "Master",
             "PhD",
         ],
     )
 
     subject = st.selectbox(
-        "Subject",
+        "📚 Subject",
         [
             "General",
             "Mathematics",
+            "Science",
             "Physics",
             "Chemistry",
             "Biology",
-            "Computer Science",
             "English",
+            "Computer Science",
+            "Artificial Intelligence",
+            "Engineering",
+            "Business",
+            "Economics",
             "History",
             "Geography",
-            "Business",
-            "Engineering",
             "Other",
         ],
     )
 
     language = st.selectbox(
-        "Language",
-        ["English", "Urdu", "Roman Urdu"],
-    )
-
-    explanation_style = st.selectbox(
-        "Explanation Style",
+        "🌐 Response Language",
         [
-            "Simple",
-            "Step-by-step",
-            "Detailed",
-            "Academic",
-            "Exam-focused",
+            "English",
+            "Urdu",
+            "Roman Urdu",
+            "Arabic",
+            "Simple English",
         ],
     )
 
-    st.divider()
-    st.caption(f"AI Model: {GROQ_MODEL}")
-
-if not GROQ_API_KEY:
-    st.warning(
-        "⚠️ GROQ_API_KEY is not configured. Add it to "
-        "`.streamlit/secrets.toml` for local testing or Streamlit Secrets for deployment."
+    explanation_style = st.selectbox(
+        "🧠 Explanation Style",
+        [
+            "Simple",
+            "Detailed",
+            "Step-by-step",
+            "Academic",
+            "Exam Preparation",
+        ],
     )
 
+    model = st.selectbox(
+        "🤖 AI Model",
+        AVAILABLE_MODELS,
+        index=AVAILABLE_MODELS.index(DEFAULT_MODEL)
+        if DEFAULT_MODEL in AVAILABLE_MODELS
+        else 0,
+    )
+
+    st.divider()
+
+    st.info(
+        "Future versions can connect this application to a "
+        "document-based RAG knowledge base."
+    )
+
+
+# ---------------------------------------------------------
+# Main Question Area
+# ---------------------------------------------------------
+st.subheader("Ask Your AI Tutor")
+
 question = st.text_area(
-    "Ask your question",
-    placeholder="Example: Explain photosynthesis in simple words.",
-    height=160,
+    "✏️ Enter your question",
+    placeholder=(
+        "Example: Explain photosynthesis step by step "
+        "in simple words."
+    ),
+    height=150,
 )
 
-if st.button("🚀 Ask AI Tutor", type="primary", use_container_width=True):
-    if not GROQ_API_KEY:
-        st.error("Please configure GROQ_API_KEY first.")
-    elif not question.strip():
-        st.warning("Please enter a question.")
-    else:
-        client = get_groq_client()
 
-        with st.spinner("AI Tutor is thinking..."):
-            answer = ask_groq(
-                client=client,
-                question=question.strip(),
-                academic_level=academic_level,
-                subject=subject,
-                language=language,
-                explanation_style=explanation_style,
+# ---------------------------------------------------------
+# Ask Button
+# ---------------------------------------------------------
+if st.button("🚀 Ask AI Tutor", type="primary", use_container_width=True):
+
+    if not question.strip():
+        st.warning("⚠️ Please enter a question first.")
+        st.stop()
+
+    request_data = {
+        "question": question.strip(),
+        "academic_level": academic_level,
+        "subject": subject,
+        "language": language,
+        "explanation_style": explanation_style,
+    }
+
+    with st.spinner("🤔 AI Tutor is thinking..."):
+
+        try:
+            answer = run_ai_tutor(
+                request_data=request_data,
+                api_key=GROQ_API_KEY,
+                model=model,
             )
 
-        st.session_state["last_question"] = question.strip()
-        st.session_state["last_answer"] = answer
+            if answer:
+                st.subheader("📖 AI Tutor Answer")
+                st.markdown(answer)
 
-if "last_answer" in st.session_state:
-    st.divider()
-    st.subheader("📚 Tutor Answer")
-    st.markdown(st.session_state["last_answer"])
+            else:
+                st.error(
+                    "❌ The AI returned an empty response. "
+                    "Please try again."
+                )
 
+        except Exception as error:
+            st.error(
+                "❌ Unable to generate the answer."
+            )
+
+            with st.expander("Technical error"):
+                st.code(str(error))
+
+
+# ---------------------------------------------------------
+# Footer
+# ---------------------------------------------------------
 st.divider()
+
 st.caption(
-    "Stage 1 foundation: Streamlit → Groq → AI Tutor. "
-    "CrewAI, RAG, verification, memory, tools, and quizzes will be added in later stages."
+    "AI Education / AI Tutor • RAG + Multi-Agent Architecture"
 )
