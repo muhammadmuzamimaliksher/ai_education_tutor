@@ -1,29 +1,25 @@
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
+from document_processor import get_chunk_text
 
-# ============================================================
-# RAG SETTINGS
-# ============================================================
+
+# =========================================================
+# EMBEDDING CONFIGURATION
+# =========================================================
 
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
-# Minimum similarity score required for retrieved content.
-#
-# Higher value = stricter retrieval
-# Lower value  = more permissive retrieval
-#
-# Start with 0.35 and test with your own PDFs.
-MIN_RELEVANCE_SCORE = 0.30
+MIN_RELEVANCE_SCORE = 0.35
 
 
-# ============================================================
+# =========================================================
 # LOAD EMBEDDING MODEL
-# ============================================================
+# =========================================================
 
 def load_embedding_model():
     """
-    Load the sentence-transformer embedding model.
+    Load the Sentence Transformer embedding model.
     """
 
     return SentenceTransformer(
@@ -31,16 +27,16 @@ def load_embedding_model():
     )
 
 
-# ============================================================
+# =========================================================
 # CREATE EMBEDDINGS
-# ============================================================
+# =========================================================
 
 def create_embeddings(
     texts,
     embedding_model,
 ):
     """
-    Convert document chunks into normalized embeddings.
+    Create normalized embeddings for text.
     """
 
     if not texts:
@@ -60,16 +56,22 @@ def create_embeddings(
     )
 
 
-# ============================================================
+# =========================================================
 # BUILD KNOWLEDGE BASE
-# ============================================================
+# =========================================================
 
 def build_knowledge_base(
     chunks,
     embedding_model,
 ):
     """
-    Build an in-memory vector knowledge base.
+    Build the RAG knowledge base.
+
+    Chunks retain:
+
+    - Exact text
+    - Page number
+    - Chunk number
     """
 
     if not chunks:
@@ -77,20 +79,37 @@ def build_knowledge_base(
             "No document chunks are available."
         )
 
+    texts = []
+
+    for chunk in chunks:
+
+        text = get_chunk_text(
+            chunk
+        )
+
+        if text:
+            texts.append(text)
+
+    if not texts:
+        raise ValueError(
+            "No readable chunk text is available."
+        )
+
     embeddings = create_embeddings(
-        chunks,
+        texts,
         embedding_model,
     )
 
     return {
         "chunks": chunks,
+        "texts": texts,
         "embeddings": embeddings,
     }
 
 
-# ============================================================
+# =========================================================
 # SEARCH KNOWLEDGE BASE
-# ============================================================
+# =========================================================
 
 def search_knowledge_base(
     query,
@@ -100,10 +119,15 @@ def search_knowledge_base(
     min_score=MIN_RELEVANCE_SCORE,
 ):
     """
-    Search the knowledge base and apply a relevance threshold.
+    Search the PDF knowledge base.
 
-    Only chunks with a similarity score >= min_score
-    are returned.
+    Returns source records containing:
+
+    - Exact text
+    - Similarity score
+    - Page number
+    - Chunk number
+    - Original position
     """
 
     if not query or not query.strip():
@@ -122,8 +146,7 @@ def search_knowledge_base(
     )
 
     embeddings = knowledge_base.get(
-        "embeddings",
-        None,
+        "embeddings"
     )
 
     if not chunks:
@@ -134,9 +157,10 @@ def search_knowledge_base(
             "Knowledge base embeddings are missing."
         )
 
-    # --------------------------------------------------------
-    # Create query embedding
-    # --------------------------------------------------------
+
+    # =====================================================
+    # QUERY EMBEDDING
+    # =====================================================
 
     query_embedding = embedding_model.encode(
         [query],
@@ -149,25 +173,25 @@ def search_knowledge_base(
         dtype="float32",
     )
 
-    # --------------------------------------------------------
-    # Calculate cosine similarity
-    #
-    # Because both document and query embeddings are
-    # normalized, dot product = cosine similarity.
-    # --------------------------------------------------------
+
+    # =====================================================
+    # COSINE SIMILARITY
+    # =====================================================
 
     scores = np.dot(
         embeddings,
         query_embedding[0],
     )
 
-    # --------------------------------------------------------
-    # Sort highest score first
-    # --------------------------------------------------------
+
+    # =====================================================
+    # SORT RESULTS
+    # =====================================================
 
     positions = np.argsort(
         scores
     )[::-1]
+
 
     results = []
 
@@ -177,18 +201,43 @@ def search_knowledge_base(
             scores[position]
         )
 
-        # ----------------------------------------------------
-        # RELEVANCE THRESHOLD
-        # ----------------------------------------------------
-
         if score < min_score:
             continue
 
+        chunk = chunks[
+            int(position)
+        ]
+
+        text = get_chunk_text(
+            chunk
+        )
+
+        if not text:
+            continue
+
+        page_number = None
+        chunk_number = None
+
+        if isinstance(
+            chunk,
+            dict,
+        ):
+
+            page_number = chunk.get(
+                "page_number"
+            )
+
+            chunk_number = chunk.get(
+                "chunk_number"
+            )
+
         results.append(
             {
-                "text": chunks[position],
+                "text": text,
                 "score": score,
                 "position": int(position),
+                "page_number": page_number,
+                "chunk_number": chunk_number,
             }
         )
 
@@ -198,16 +247,15 @@ def search_knowledge_base(
     return results
 
 
-# ============================================================
-# CHECK WHETHER RELEVANT INFORMATION EXISTS
-# ============================================================
+# =========================================================
+# RELEVANCE CHECK
+# =========================================================
 
 def has_relevant_information(
-    search_results,
+    search_results
 ):
     """
-    Return True when at least one sufficiently relevant
-    chunk was found.
+    Check whether RAG returned relevant PDF evidence.
     """
 
     if not search_results:
@@ -216,17 +264,15 @@ def has_relevant_information(
     return True
 
 
-# ============================================================
-# GET BEST RELEVANCE SCORE
-# ============================================================
+# =========================================================
+# BEST RELEVANCE SCORE
+# =========================================================
 
 def get_best_relevance_score(
-    search_results,
+    search_results
 ):
     """
-    Return the highest retrieval score.
-
-    Returns 0.0 if no results exist.
+    Return the highest similarity score.
     """
 
     if not search_results:
@@ -236,3 +282,107 @@ def get_best_relevance_score(
         result["score"]
         for result in search_results
     )
+
+
+# =========================================================
+# FORMAT RETRIEVED CONTEXT
+# =========================================================
+
+def format_retrieved_context(
+    search_results,
+):
+    """
+    Format retrieved PDF passages for AI agents.
+
+    The original passage text is preserved.
+    """
+
+    if not search_results:
+        return ""
+
+    sections = []
+
+    for result in search_results:
+
+        page_number = result.get(
+            "page_number"
+        )
+
+        score = result.get(
+            "score",
+            0.0,
+        )
+
+        text = result.get(
+            "text",
+            "",
+        )
+
+        if page_number is not None:
+
+            header = (
+                f"[PDF Page {page_number} | "
+                f"Relevance {score:.3f}]"
+            )
+
+        else:
+
+            header = (
+                f"[PDF Passage | "
+                f"Relevance {score:.3f}]"
+            )
+
+        sections.append(
+            f"{header}\n{text}"
+        )
+
+    return "\n\n".join(
+        sections
+    )
+
+
+# =========================================================
+# EXACT SOURCE PASSAGES
+# =========================================================
+
+def get_exact_source_passages(
+    search_results,
+):
+    """
+    Return the exact retrieved PDF passages.
+
+    No rewriting or AI generation occurs here.
+    """
+
+    if not search_results:
+        return []
+
+    passages = []
+
+    for result in search_results:
+
+        text = result.get(
+            "text",
+            "",
+        )
+
+        if not text:
+            continue
+
+        passages.append(
+            {
+                "text": text,
+                "page_number": result.get(
+                    "page_number"
+                ),
+                "score": result.get(
+                    "score",
+                    0.0,
+                ),
+                "chunk_number": result.get(
+                    "chunk_number"
+                ),
+            }
+        )
+
+    return passages
