@@ -1,434 +1,96 @@
-import streamlit as st
-
-from config import (
-    APP_TITLE,
-    GROQ_API_KEY,
-    DEFAULT_MODEL,
-    AVAILABLE_MODELS,
-)
-
-from ai_engine import run_ai_tutor
-
-from document_processor import (
-    extract_text_from_pdf,
-    split_text,
-)
-
-from rag_engine import (
-    load_embedding_model,
-    build_knowledge_base,
-    search_knowledge_base,
-)
+import numpy as np
+from sentence_transformers import SentenceTransformer
 
 
-# =========================================================
-# PAGE CONFIGURATION
-# =========================================================
-
-st.set_page_config(
-    page_title=APP_TITLE,
-    page_icon="🎓",
-    layout="wide",
-)
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 
-# =========================================================
-# HEADER
-# =========================================================
-
-st.title("🎓 AI Education / AI Tutor")
-
-st.write(
-    "AI-powered education platform with "
-    "Multi-Agent and RAG-based learning support."
-)
+def load_embedding_model():
+    """Load the sentence-transformer embedding model."""
+    return SentenceTransformer(EMBEDDING_MODEL)
 
 
-# =========================================================
-# API KEY CHECK
-# =========================================================
+def create_embeddings(texts, embedding_model):
+    """Convert text chunks into normalized embeddings."""
 
-if not GROQ_API_KEY:
+    if not texts:
+        raise ValueError("No text chunks were provided.")
 
-    st.error(
-        "❌ GROQ_API_KEY is not configured."
+    embeddings = embedding_model.encode(
+        texts,
+        convert_to_numpy=True,
+        normalize_embeddings=True,
     )
 
-    st.info(
-        "Add GROQ_API_KEY to Streamlit Secrets "
-        "and reboot the application."
+    return np.asarray(embeddings, dtype="float32")
+
+
+def build_knowledge_base(chunks, embedding_model):
+    """Create an in-memory vector knowledge base."""
+
+    if not chunks:
+        raise ValueError("No document chunks are available.")
+
+    embeddings = create_embeddings(
+        chunks,
+        embedding_model,
     )
 
-    st.stop()
-
-
-# =========================================================
-# SESSION STATE
-# =========================================================
-
-if "document_chunks" not in st.session_state:
-    st.session_state.document_chunks = []
-
-if "rag_index" not in st.session_state:
-    st.session_state.rag_index = None
-
-if "embedding_model" not in st.session_state:
-    st.session_state.embedding_model = None
-
-if "document_name" not in st.session_state:
-    st.session_state.document_name = ""
-
-if "rag_ready" not in st.session_state:
-    st.session_state.rag_ready = False
-
-
-# =========================================================
-# SIDEBAR
-# =========================================================
-
-with st.sidebar:
-
-    st.header("⚙️ Learning Settings")
-
-    academic_level = st.selectbox(
-        "🎓 Academic Level",
-        [
-            "Grade 1-5",
-            "Grade 6-8",
-            "Grade 9-10",
-            "Grade 11-12",
-            "Bachelor",
-            "Master",
-            "PhD",
-        ],
-    )
-
-    subject = st.selectbox(
-        "📚 Subject",
-        [
-            "General",
-            "Mathematics",
-            "Science",
-            "Physics",
-            "Chemistry",
-            "Biology",
-            "English",
-            "Computer Science",
-            "Artificial Intelligence",
-            "Engineering",
-            "Business",
-            "Economics",
-            "History",
-            "Geography",
-            "Other",
-        ],
-    )
-
-    language = st.selectbox(
-        "🌐 Response Language",
-        [
-            "English",
-            "Urdu",
-            "Roman Urdu",
-            "Arabic",
-            "Simple English",
-        ],
-    )
-
-    explanation_style = st.selectbox(
-        "🧠 Explanation Style",
-        [
-            "Simple",
-            "Detailed",
-            "Step-by-step",
-            "Academic",
-            "Exam Preparation",
-        ],
-    )
-
-    model = st.selectbox(
-        "🤖 AI Model",
-        AVAILABLE_MODELS,
-        index=(
-            AVAILABLE_MODELS.index(DEFAULT_MODEL)
-            if DEFAULT_MODEL in AVAILABLE_MODELS
-            else 0
-        ),
-    )
-
-
-# =========================================================
-# RAG DOCUMENT SECTION
-# =========================================================
-
-st.subheader("📚 Study Material")
-
-uploaded_file = st.file_uploader(
-    "Upload a PDF textbook, lecture note, or study material",
-    type=["pdf"],
-)
-
-
-# =========================================================
-# PROCESS PDF
-# =========================================================
-
-if uploaded_file is not None:
-
-    if (
-        st.session_state.document_name
-        != uploaded_file.name
-    ):
-
-        with st.spinner(
-            "📖 Processing your study material..."
-        ):
-
-            try:
-
-                # -----------------------------------------
-                # Extract text
-                # -----------------------------------------
-
-                text = extract_text_from_pdf(
-                    uploaded_file
-                )
-
-                # -----------------------------------------
-                # Split text
-                # -----------------------------------------
-
-                chunks = split_text(
-                    text,
-                    chunk_size=800,
-                    chunk_overlap=100,
-                )
-
-                if not chunks:
-                    raise ValueError(
-                        "No usable text was found in the PDF."
-                    )
-
-                # -----------------------------------------
-                # Load embedding model
-                # -----------------------------------------
-
-                if (
-                    st.session_state.embedding_model
-                    is None
-                ):
-
-                    st.session_state.embedding_model = (
-                        load_embedding_model()
-                    )
-
-                # -----------------------------------------
-                # Build FAISS database
-                # -----------------------------------------
-
-                index = build_knowledge_base(
-                    chunks,
-                    st.session_state.embedding_model,
-                )
-
-                # -----------------------------------------
-                # Save in session
-                # -----------------------------------------
-
-                st.session_state.document_chunks = chunks
-
-                st.session_state.rag_index = index
-
-                st.session_state.document_name = (
-                    uploaded_file.name
-                )
-
-                st.session_state.rag_ready = True
-
-                st.success(
-                    "✅ Study material processed successfully."
-                )
-
-            except Exception as error:
-
-                st.session_state.rag_ready = False
-
-                st.error(
-                    "❌ Could not process the PDF."
-                )
-
-                with st.expander(
-                    "Technical details"
-                ):
-                    st.code(str(error))
-
-
-# =========================================================
-# KNOWLEDGE BASE STATUS
-# =========================================================
-
-if st.session_state.rag_ready:
-
-    st.success(
-        f"📗 Knowledge Base Ready: "
-        f"{st.session_state.document_name}"
-    )
-
-    st.caption(
-        f"{len(st.session_state.document_chunks)} "
-        "text chunks are available for retrieval."
-    )
-
-
-# =========================================================
-# QUESTION SECTION
-# =========================================================
-
-st.divider()
-
-st.subheader("💬 Ask Your AI Tutor")
-
-question = st.text_area(
-    "Enter your question",
-    placeholder=(
-        "Example: Explain Newton's second law "
-        "using the uploaded textbook."
-    ),
-    height=150,
-)
-
-
-# =========================================================
-# ASK AI TUTOR
-# =========================================================
-
-if st.button(
-    "🚀 Ask AI Tutor",
-    type="primary",
-    use_container_width=True,
-):
-
-    if not question.strip():
-
-        st.warning(
-            "⚠️ Please enter a question."
-        )
-
-        st.stop()
-
-    # -----------------------------------------------------
-    # RAG SEARCH
-    # -----------------------------------------------------
-
-    retrieved_context = ""
-
-    if st.session_state.rag_ready:
-
-        try:
-
-            results = search_knowledge_base(
-                query=question,
-                embedding_model=(
-                    st.session_state.embedding_model
-                ),
-                index=st.session_state.rag_index,
-                chunks=(
-                    st.session_state.document_chunks
-                ),
-                top_k=4,
-            )
-
-            retrieved_context = "\n\n".join(
-                [
-                    result["text"]
-                    for result in results
-                ]
-            )
-
-        except Exception as error:
-
-            st.warning(
-                "⚠️ RAG search failed. "
-                "The AI will answer without "
-                "document context."
-            )
-
-            with st.expander(
-                "RAG technical details"
-            ):
-                st.code(str(error))
-
-
-    # -----------------------------------------------------
-    # AI REQUEST
-    # -----------------------------------------------------
-
-    request_data = {
-
-        "question": question.strip(),
-
-        "academic_level": academic_level,
-
-        "subject": subject,
-
-        "language": language,
-
-        "explanation_style": explanation_style,
-
-        "retrieved_context": retrieved_context,
+    return {
+        "chunks": chunks,
+        "embeddings": embeddings,
     }
 
 
-    # -----------------------------------------------------
-    # GENERATE ANSWER
-    # -----------------------------------------------------
+def search_knowledge_base(
+    query,
+    embedding_model,
+    knowledge_base,
+    top_k=4,
+):
+    """Search the knowledge base for the most relevant chunks."""
 
-    with st.spinner(
-        "🤔 AI Tutor is preparing your answer..."
-    ):
+    if not query or not query.strip():
+        raise ValueError("Search query cannot be empty.")
 
-        try:
+    if knowledge_base is None:
+        raise ValueError("Knowledge base is not available.")
 
-            answer = run_ai_tutor(
-                request_data=request_data,
-                api_key=GROQ_API_KEY,
-                model=model,
-            )
+    chunks = knowledge_base["chunks"]
+    embeddings = knowledge_base["embeddings"]
 
-            if answer:
+    if not chunks:
+        return []
 
-                st.subheader(
-                    "📖 AI Tutor Answer"
-                )
+    query_embedding = embedding_model.encode(
+        [query],
+        convert_to_numpy=True,
+        normalize_embeddings=True,
+    )
 
-                st.markdown(answer)
+    query_embedding = np.asarray(
+        query_embedding,
+        dtype="float32",
+    )
 
-            else:
+    scores = np.dot(
+        embeddings,
+        query_embedding[0],
+    )
 
-                st.error(
-                    "❌ AI returned an empty answer."
-                )
+    top_k = min(top_k, len(chunks))
 
-        except Exception as error:
+    positions = np.argsort(scores)[::-1][:top_k]
 
-            st.error(
-                "❌ Unable to generate the answer."
-            )
+    results = []
 
-            with st.expander(
-                "Technical error"
-            ):
+    for position in positions:
+        results.append(
+            {
+                "text": chunks[position],
+                "score": float(scores[position]),
+                "position": int(position),
+            }
+        )
 
-                st.code(str(error))
-
-
-# =========================================================
-# FOOTER
-# =========================================================
-
-st.divider()
-
-st.caption(
-    "AI Education / AI Tutor • "
-    "RAG + Multi-Agent Architecture"
-)
+    return results
