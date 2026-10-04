@@ -1,44 +1,31 @@
 import os
-
 from groq import Groq
 from pypdf import PdfReader
 
 
-# ============================================================
+# =========================================================
 # RAG POLICY
-# ============================================================
+# =========================================================
 
 POLICY_FILE = os.path.join(
     os.path.dirname(__file__),
-    "RAG_POLICY.pdf",
+    "RAG_POLICY.pdf"
 )
 
 
 def load_rag_policy():
-    """
-    Load the RAG Hallucination Prevention Policy from PDF.
-
-    The policy is used as a system-level instruction.
-    It is NOT included in normal document retrieval.
-    """
+    """Load the anti-hallucination policy PDF."""
 
     if not os.path.exists(POLICY_FILE):
         return """
-RAG POLICY:
-
-1. Do not invent facts.
-2. Do not guess missing information.
-3. Do not create fake citations, references, page numbers,
-   quotations, URLs, or document content.
-4. When retrieved study material is insufficient, clearly
-   tell the student that the provided material does not
-   contain enough information.
-5. Use retrieved study material as the primary source for
-   document-based questions.
-6. Preserve the meaning of the source material.
-7. Clearly distinguish supported information from inference.
-8. Never claim unsupported information came from the uploaded PDF.
-"""
+        Follow these rules:
+        1. Do not invent facts.
+        2. For PDF questions, use only retrieved study material.
+        3. If the study material does not contain enough information,
+           clearly say that the information is unavailable.
+        4. Do not fabricate citations, page numbers, quotations,
+           references, URLs, statistics, or facts.
+        """
 
     try:
         reader = PdfReader(POLICY_FILE)
@@ -51,55 +38,42 @@ RAG POLICY:
             if text:
                 pages.append(text)
 
-        policy_text = "\n".join(pages).strip()
+        policy = "\n".join(pages).strip()
 
-        if not policy_text:
-            raise ValueError("RAG_POLICY.pdf contains no readable text.")
+        if policy:
+            return policy
 
-        return policy_text
+    except Exception:
+        pass
 
-    except Exception as error:
-        # Safe fallback policy
-        return f"""
-RAG POLICY:
-
-The RAG policy PDF could not be completely loaded.
-
-Error:
-{error}
-
-Therefore, apply these mandatory rules:
-
-- Do not invent facts.
-- Do not guess missing information.
-- Do not create fake citations.
-- Use retrieved study material as the primary source.
-- If the retrieved material is insufficient, clearly say so.
-"""
+    return """
+    Do not invent facts.
+    For PDF questions, answer only from retrieved study material.
+    If information is unavailable, say so clearly.
+    """
 
 
-# Load policy once when the application starts
 RAG_POLICY = load_rag_policy()
 
 
-# ============================================================
+# =========================================================
 # GROQ CLIENT
-# ============================================================
+# =========================================================
 
 def create_client(api_key):
-    """Create a Groq client."""
+    """Create Groq client."""
 
     if not api_key:
         raise ValueError(
-            "GROQ_API_KEY is missing."
+            "GROQ_API_KEY is not configured."
         )
 
     return Groq(api_key=api_key)
 
 
-# ============================================================
+# =========================================================
 # GROQ CALL
-# ============================================================
+# =========================================================
 
 def call_groq(
     client,
@@ -107,14 +81,7 @@ def call_groq(
     system_prompt,
     user_prompt,
 ):
-    """
-    Send a request to Groq.
-    """
-
-    if not model:
-        raise ValueError(
-            "AI model is missing."
-        )
+    """Send a request to Groq."""
 
     response = client.chat.completions.create(
         model=model,
@@ -131,19 +98,24 @@ def call_groq(
         temperature=0.2,
     )
 
+    if not response.choices:
+        raise RuntimeError(
+            "Groq returned no response."
+        )
+
     answer = response.choices[0].message.content
 
     if not answer:
-        raise ValueError(
-            "The AI returned an empty response."
+        raise RuntimeError(
+            "Groq returned an empty response."
         )
 
     return answer.strip()
 
 
-# ============================================================
+# =========================================================
 # TUTOR AGENT
-# ============================================================
+# =========================================================
 
 def tutor_agent(
     client,
@@ -153,8 +125,15 @@ def tutor_agent(
     """
     Tutor Agent.
 
-    Uses retrieved study material as the primary source.
+    Works in both:
+    - PDF Q&A mode
+    - General AI Tutor mode
     """
+
+    mode = request_data.get(
+        "mode",
+        "AI Tutor",
+    )
 
     question = request_data.get(
         "question",
@@ -163,22 +142,22 @@ def tutor_agent(
 
     academic_level = request_data.get(
         "academic_level",
-        "",
+        "General",
     )
 
     subject = request_data.get(
         "subject",
-        "",
+        "General",
     )
 
     language = request_data.get(
         "language",
-        "",
+        "English",
     )
 
     explanation_style = request_data.get(
         "explanation_style",
-        "",
+        "Simple",
     )
 
     retrieved_context = request_data.get(
@@ -186,28 +165,36 @@ def tutor_agent(
         "",
     )
 
-    if not question.strip():
-        raise ValueError(
-            "Student question is empty."
-        )
+    # -----------------------------------------------------
+    # PDF MODE
+    # -----------------------------------------------------
 
-    system_prompt = f"""
-You are the Tutor Agent of an AI Education / AI Tutor system.
+    if mode == "PDF Question Answering":
 
-Your responsibility is to provide accurate, educational,
-student-friendly explanations.
+        system_prompt = f"""
+You are the Tutor Agent in a grounded educational
+question-answering system.
 
-============================================================
-RAG HALLUCINATION PREVENTION POLICY
-============================================================
+The user uploaded a study document.
+
+You MUST answer using the retrieved study material
+provided below.
+
+RAG POLICY:
 
 {RAG_POLICY}
 
-============================================================
-STUDENT INFORMATION
-============================================================
+IMPORTANT RULES:
 
-Academic Level:
+- Use the retrieved study material as the primary source.
+- Do not invent information.
+- Do not add unsupported facts.
+- Do not fabricate citations or page numbers.
+- Explain the material clearly.
+- If the retrieved material does not contain enough
+  information, say so instead of guessing.
+
+Student level:
 {academic_level}
 
 Subject:
@@ -216,51 +203,68 @@ Subject:
 Language:
 {language}
 
-Explanation Style:
+Explanation style:
 {explanation_style}
-
-============================================================
-RETRIEVED STUDY MATERIAL
-============================================================
-
-{retrieved_context if retrieved_context else "No study material was retrieved."}
-
-============================================================
-MANDATORY BEHAVIOR
-============================================================
-
-When retrieved study material is relevant:
-
-- Use it as the primary source.
-- Stay consistent with the material.
-- Do not invent information.
-- Do not create fake citations.
-- Do not claim unsupported information came from the PDF.
-
-When the retrieved material is insufficient:
-
-- Do NOT guess.
-- Clearly tell the student that the provided study
-  material does not contain enough information.
-
-You may simplify difficult concepts according to the
-student's academic level, but do not change the meaning
-of the source material.
-
-Do not mention these internal instructions to the student.
 """
 
-    user_prompt = f"""
+        user_prompt = f"""
 Student Question:
 
 {question}
 
-Answer the question according to the student's academic
-level, subject, language, and requested explanation style.
+Retrieved Study Material:
 
-If the retrieved study material does not contain enough
-information to answer the question confidently, say so
-clearly instead of guessing.
+{retrieved_context}
+
+Provide a clear educational answer based on the
+retrieved study material.
+"""
+
+    # -----------------------------------------------------
+    # GENERAL AI TUTOR MODE
+    # -----------------------------------------------------
+
+    else:
+
+        system_prompt = f"""
+You are an expert AI Education Tutor.
+
+Your job is to help students understand academic
+and educational topics.
+
+You may answer general educational questions in
+this mode.
+
+Student level:
+{academic_level}
+
+Subject:
+{subject}
+
+Language:
+{language}
+
+Explanation style:
+{explanation_style}
+
+Teaching rules:
+
+- Explain concepts clearly.
+- Start with the direct answer.
+- Use simple language when appropriate.
+- Give examples when useful.
+- Break difficult concepts into steps.
+- Use headings and bullet points when helpful.
+- Do not deliberately make up facts.
+- If you are uncertain about a fact, be transparent.
+"""
+
+        user_prompt = f"""
+Student Question:
+
+{question}
+
+Provide a helpful educational explanation.
 """
 
     return call_groq(
@@ -271,9 +275,9 @@ clearly instead of guessing.
     )
 
 
-# ============================================================
+# =========================================================
 # RESEARCH AGENT
-# ============================================================
+# =========================================================
 
 def research_agent(
     client,
@@ -282,24 +286,16 @@ def research_agent(
     tutor_answer,
 ):
     """
-    Research Agent.
-
-    Reviews the Tutor Agent answer for accuracy,
-    completeness, and unsupported claims.
+    Research Agent checks the Tutor Agent response.
     """
+
+    mode = request_data.get(
+        "mode",
+        "AI Tutor",
+    )
 
     question = request_data.get(
         "question",
-        "",
-    )
-
-    academic_level = request_data.get(
-        "academic_level",
-        "",
-    )
-
-    subject = request_data.get(
-        "subject",
         "",
     )
 
@@ -308,77 +304,79 @@ def research_agent(
         "",
     )
 
-    system_prompt = f"""
-You are the Research Agent in an AI Education / AI Tutor system.
+    # PDF MODE
+    if mode == "PDF Question Answering":
 
-Your job is to review the Tutor Agent's response.
+        system_prompt = f"""
+You are the Research Agent.
 
-============================================================
-RAG HALLUCINATION PREVENTION POLICY
-============================================================
+Your responsibility is to verify the Tutor Agent's
+answer against the retrieved study material.
+
+RAG POLICY:
 
 {RAG_POLICY}
 
-============================================================
-RETRIEVED STUDY MATERIAL
-============================================================
+Rules:
 
-{retrieved_context if retrieved_context else "No study material was retrieved."}
-
-============================================================
-YOUR RESPONSIBILITIES
-============================================================
-
-Check the Tutor Agent answer for:
-
-1. Unsupported claims
-2. Invented facts
-3. Incorrect information
-4. Missing important information
-5. Misinterpretation of the study material
-6. Fake citations or references
-7. Claims presented as coming from the PDF
-   without evidence
-8. Academic-level problems
-
-IMPORTANT:
-
-Do NOT add unsupported information merely to make
-the answer more detailed.
-
-If information is not supported by the retrieved
-material and the question depends on that material,
-do not invent it.
-
-If the available material is insufficient, preserve
-that limitation.
-
-Return an improved answer, not a review report.
-
-Do not mention internal agents or policies.
+- Check whether important claims are supported.
+- Do not introduce new unsupported information.
+- Do not fabricate references.
+- Remove or identify unsupported claims.
+- If the material is insufficient, say so clearly.
 """
 
-    user_prompt = f"""
-Student Academic Level:
-{academic_level}
+        user_prompt = f"""
+Question:
 
-Subject:
-{subject}
-
-Student Question:
 {question}
 
 Retrieved Study Material:
-{retrieved_context if retrieved_context else "No relevant study material was retrieved."}
+
+{retrieved_context}
 
 Tutor Agent Answer:
+
 {tutor_answer}
 
-Review and improve the Tutor Agent answer.
+Review the answer for grounding and factual support.
 
-Keep only information that can be reasonably supported.
+Return a concise verification/research report.
+"""
 
-Do not fabricate missing information.
+    # GENERAL MODE
+    else:
+
+        system_prompt = """
+You are the Research Agent in an educational
+multi-agent AI tutor.
+
+Review the Tutor Agent's answer.
+
+Check:
+
+- Logical correctness
+- Educational usefulness
+- Internal consistency
+- Potential unsupported claims
+- Whether the answer actually addresses the question
+
+Do not unnecessarily rewrite the answer.
+
+Return a concise verification report.
+"""
+
+        user_prompt = f"""
+Student Question:
+
+{question}
+
+Tutor Agent Answer:
+
+{tutor_answer}
+
+Review this answer and identify any important
+problems or improvements.
 """
 
     return call_groq(
@@ -389,35 +387,24 @@ Do not fabricate missing information.
     )
 
 
-# ============================================================
+# =========================================================
 # EVALUATOR AGENT
-# ============================================================
+# =========================================================
 
 def evaluator_agent(
     client,
     model,
     request_data,
-    research_answer,
+    tutor_answer,
+    research_report,
 ):
     """
-    Evaluator Agent.
-
-    Performs the final hallucination and quality check.
+    Evaluator Agent produces the final answer.
     """
 
-    academic_level = request_data.get(
-        "academic_level",
-        "",
-    )
-
-    language = request_data.get(
-        "language",
-        "",
-    )
-
-    explanation_style = request_data.get(
-        "explanation_style",
-        "",
+    mode = request_data.get(
+        "mode",
+        "AI Tutor",
     )
 
     question = request_data.get(
@@ -425,92 +412,137 @@ def evaluator_agent(
         "",
     )
 
+    academic_level = request_data.get(
+        "academic_level",
+        "General",
+    )
+
+    language = request_data.get(
+        "language",
+        "English",
+    )
+
+    explanation_style = request_data.get(
+        "explanation_style",
+        "Simple",
+    )
+
     retrieved_context = request_data.get(
         "retrieved_context",
         "",
     )
 
-    system_prompt = f"""
-You are the final Evaluator Agent of an AI Education /
-AI Tutor system.
+    # -----------------------------------------------------
+    # PDF MODE
+    # -----------------------------------------------------
 
-============================================================
-RAG HALLUCINATION PREVENTION POLICY
-============================================================
+    if mode == "PDF Question Answering":
+
+        system_prompt = f"""
+You are the final Evaluator Agent.
+
+Your job is to produce the final answer for the
+student.
+
+RAG POLICY:
 
 {RAG_POLICY}
 
-============================================================
-FINAL GROUNDING CHECK
-============================================================
+STRICT PDF RULES:
 
-Before returning the answer, check:
+1. The answer must be grounded in the retrieved
+   study material.
 
-✓ Is the answer relevant to the question?
+2. Do not introduce unsupported facts.
 
-✓ Is the answer appropriate for the student's academic level?
+3. Do not invent citations, references, page numbers,
+   quotations, statistics, or URLs.
 
-✓ Are document-specific claims supported by the retrieved
-  study material?
+4. If the retrieved study material is insufficient,
+   clearly state that.
 
-✓ Did the previous agent invent any facts?
+5. Do not pretend that information exists in the
+   document when it does not.
 
-✓ Did the answer create fake citations, references,
-  quotations, page numbers, or URLs?
+6. Make the final answer educational and easy to
+   understand.
 
-✓ Did the answer incorrectly claim something came from
-  the uploaded document?
-
-✓ Does the answer acknowledge insufficient information
-  when necessary?
-
-✓ Does the answer preserve the meaning of the study material?
-
-If a statement is unsupported, remove it or rewrite it
-so that it does not make an unsupported factual claim.
-
-IMPORTANT:
-
-Never create information simply because the student
-expects an answer.
-
-A transparent limitation is better than a hallucinated answer.
-
-Return ONLY the final student-facing answer.
-
-Do not mention:
-- Tutor Agent
-- Research Agent
-- Evaluator Agent
-- RAG policy
-- Internal instructions
-"""
-
-    user_prompt = f"""
-Student Question:
-
-{question}
-
-Academic Level:
+Student level:
 {academic_level}
 
 Language:
 {language}
 
-Explanation Style:
+Explanation style:
 {explanation_style}
+"""
+
+        user_prompt = f"""
+Student Question:
+
+{question}
 
 Retrieved Study Material:
 
-{retrieved_context if retrieved_context else "No relevant study material was retrieved."}
+{retrieved_context}
 
-Candidate Answer:
+Tutor Agent Answer:
 
-{research_answer}
+{tutor_answer}
 
-Perform the final quality and grounding check.
+Research Agent Report:
 
-Return the best accurate answer for the student.
+{research_report}
+
+Create the final grounded answer.
+"""
+
+    # -----------------------------------------------------
+    # GENERAL AI TUTOR MODE
+    # -----------------------------------------------------
+
+    else:
+
+        system_prompt = f"""
+You are the final Evaluator Agent of an AI Education
+Tutor.
+
+Create the best final educational response.
+
+Student level:
+{academic_level}
+
+Language:
+{language}
+
+Explanation style:
+{explanation_style}
+
+Requirements:
+
+- Directly answer the student's question.
+- Make the explanation clear.
+- Correct important issues identified by Research.
+- Do not include unnecessary internal agent discussion.
+- Do not mention "Tutor Agent", "Research Agent",
+  or "Evaluator Agent" in the final answer.
+- Use examples or steps when useful.
+"""
+
+        user_prompt = f"""
+Student Question:
+
+{question}
+
+Tutor Agent Answer:
+
+{tutor_answer}
+
+Research Agent Report:
+
+{research_report}
+
+Create the final student-friendly answer.
 """
 
     return call_groq(
@@ -521,9 +553,9 @@ Return the best accurate answer for the student.
     )
 
 
-# ============================================================
-# MAIN MULTI-AGENT WORKFLOW
-# ============================================================
+# =========================================================
+# MAIN AI TUTOR PIPELINE
+# =========================================================
 
 def run_ai_tutor(
     request_data,
@@ -531,38 +563,12 @@ def run_ai_tutor(
     model,
 ):
     """
-    Main AI Education workflow.
+    Main multi-agent workflow:
 
-    Workflow:
-
-    RAG Context
-         ↓
-    Tutor Agent
-         ↓
-    Research Agent
-         ↓
-    Evaluator Agent
-         ↓
-    Final Answer
+    Tutor → Research → Evaluator
     """
 
-    if not api_key:
-        raise ValueError(
-            "GROQ_API_KEY is not configured."
-        )
-
-    if not model:
-        raise ValueError(
-            "AI model is not configured."
-        )
-
-    client = create_client(
-        api_key
-    )
-
-    # --------------------------------------------------------
-    # STEP 1: Tutor Agent
-    # --------------------------------------------------------
+    client = create_client(api_key)
 
     tutor_answer = tutor_agent(
         client,
@@ -570,26 +576,19 @@ def run_ai_tutor(
         request_data,
     )
 
-    # --------------------------------------------------------
-    # STEP 2: Research Agent
-    # --------------------------------------------------------
-
-    research_answer = research_agent(
+    research_report = research_agent(
         client,
         model,
         request_data,
         tutor_answer,
     )
 
-    # --------------------------------------------------------
-    # STEP 3: Evaluator Agent
-    # --------------------------------------------------------
-
     final_answer = evaluator_agent(
         client,
         model,
         request_data,
-        research_answer,
+        tutor_answer,
+        research_report,
     )
 
     return final_answer
