@@ -1,119 +1,68 @@
-import faiss
-import numpy as np
-from sentence_transformers import SentenceTransformer
+import os
+import streamlit as st
 
 
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+# =========================================================
+# Application
+# =========================================================
+
+APP_TITLE = "AI Education / AI Tutor"
 
 
-def load_embedding_model():
-    """Load the embedding model."""
+# =========================================================
+# Groq API Key
+# =========================================================
 
-    return SentenceTransformer(EMBEDDING_MODEL)
+def get_groq_api_key():
+    """
+    Get Groq API key.
 
+    Priority:
+    1. Streamlit Secrets
+    2. Environment variable
+    """
 
-def create_embeddings(texts, embedding_model):
-    """Convert text chunks into embeddings."""
+    try:
+        secret_key = st.secrets.get("GROQ_API_KEY", "")
 
-    if not texts:
-        raise ValueError("No text chunks were provided.")
+        if secret_key:
+            return str(secret_key).strip()
 
-    embeddings = embedding_model.encode(
-        texts,
-        convert_to_numpy=True,
-        normalize_embeddings=True,
-    )
+    except Exception:
+        pass
 
-    return np.asarray(embeddings, dtype="float32")
+    environment_key = os.getenv("GROQ_API_KEY", "")
 
-
-def create_faiss_index(embeddings):
-    """Create a FAISS similarity search index."""
-
-    if embeddings is None or len(embeddings) == 0:
-        raise ValueError("No embeddings were provided.")
-
-    dimension = embeddings.shape[1]
-
-    index = faiss.IndexFlatIP(dimension)
-
-    index.add(embeddings)
-
-    return index
+    return environment_key.strip()
 
 
-def build_knowledge_base(chunks, embedding_model):
-    """Build a FAISS knowledge base from document chunks."""
-
-    if not chunks:
-        raise ValueError("No chunks available.")
-
-    embeddings = create_embeddings(
-        chunks,
-        embedding_model,
-    )
-
-    index = create_faiss_index(
-        embeddings
-    )
-
-    return index
+GROQ_API_KEY = get_groq_api_key()
 
 
-def search_knowledge_base(
-    query,
-    embedding_model,
-    index,
-    chunks,
-    top_k=4,
-):
-    """Find the most relevant document chunks."""
+# =========================================================
+# Models
+# =========================================================
 
-    if not query or not query.strip():
-        raise ValueError("Search query cannot be empty.")
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
 
-    if index is None:
-        raise ValueError("Knowledge base is not available.")
+AVAILABLE_MODELS = [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+]
 
-    if not chunks:
-        raise ValueError("No document chunks are available.")
 
-    query_embedding = embedding_model.encode(
-        [query],
-        convert_to_numpy=True,
-        normalize_embeddings=True,
-    )
+# =========================================================
+# Optional Model Override
+# =========================================================
 
-    query_embedding = np.asarray(
-        query_embedding,
-        dtype="float32",
-    )
+try:
+    secret_model = st.secrets.get("GROQ_MODEL", "")
 
-    number_to_return = min(
-        top_k,
-        len(chunks),
-    )
+    if secret_model:
+        DEFAULT_MODEL = str(secret_model).strip()
 
-    scores, positions = index.search(
-        query_embedding,
-        number_to_return,
-    )
+        if DEFAULT_MODEL not in AVAILABLE_MODELS:
+            AVAILABLE_MODELS.insert(0, DEFAULT_MODEL)
 
-    results = []
-
-    for score, position in zip(
-        scores[0],
-        positions[0],
-    ):
-        if position < 0:
-            continue
-
-        results.append(
-            {
-                "text": chunks[position],
-                "score": float(score),
-                "position": int(position),
-            }
-        )
-
-    return results
+except Exception:
+    pass
