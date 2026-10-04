@@ -560,17 +560,25 @@ def render_learning_tools(
                 "content": result,
             }
 
-            if mode == "PDF Question Answering":
+           
+            if tool_name != "Quiz":
 
-                st.session_state.pdf_messages.append(
-                    message
-                )
-
-            else:
-
-                st.session_state.tutor_messages.append(
-                    message
-                )
+                message = {
+                    "role": "assistant",
+                    "content": result,
+                }
+            
+                if mode == "PDF Question Answering":
+            
+                    st.session_state.pdf_messages.append(
+                        message
+                    )
+            
+                else:
+            
+                    st.session_state.tutor_messages.append(
+                        message
+                    )
 
             st.rerun()
 
