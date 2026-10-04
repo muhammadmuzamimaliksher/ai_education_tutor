@@ -1,284 +1,314 @@
-import os
-import time
-import uuid
-
 from groq import Groq
-from config import STAGE_CONFIG
 
 
-def _client(api_key):
+# =========================================================
+# Groq Client
+# =========================================================
+
+def create_client(api_key: str):
     """
     Create and return a Groq client.
-
-    Priority:
-    1. API key supplied by Streamlit
-    2. GROQ_API_KEY environment variable
     """
 
-    key = (api_key or os.getenv("GROQ_API_KEY", "")).strip()
+    if not api_key:
+        raise ValueError("GROQ_API_KEY is missing.")
 
-    if not key:
-        raise RuntimeError(
-            "Groq API key is missing. "
-            "Add GROQ_API_KEY to Streamlit Secrets."
-        )
-
-    if not key.startswith("gsk_"):
-        raise RuntimeError(
-            "Invalid Groq API key. "
-            "A Groq API key normally starts with 'gsk_'."
-        )
-
-    return Groq(api_key=key)
+    return Groq(api_key=api_key)
 
 
-def _call(client, model, system, prompt, retries=3):
+# =========================================================
+# Generic Groq Call
+# =========================================================
+
+def call_groq(
+    client,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+) -> str:
     """
-    Call Groq with automatic retry and exponential backoff.
+    Send a request to Groq and return the generated text.
     """
 
-    last_error = None
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {
+                "role": "system",
+                "content": system_prompt,
+            },
+            {
+                "role": "user",
+                "content": user_prompt,
+            },
+        ],
+        temperature=0.4,
+    )
 
-    for attempt in range(retries):
+    if not response.choices:
+        raise RuntimeError("Groq returned no choices.")
 
-        try:
+    content = response.choices[0].message.content
 
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": system
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                temperature=0.7
-            )
+    if not content:
+        raise RuntimeError("Groq returned an empty response.")
 
-            if not response.choices:
-                raise RuntimeError(
-                    "Groq returned no response choices."
-                )
-
-            text = response.choices[0].message.content
-
-            if not text:
-                raise RuntimeError(
-                    "Groq returned an empty response."
-                )
-
-            text = text.strip()
-
-            if not text:
-                raise RuntimeError(
-                    "Groq returned an empty response."
-                )
-
-            return text
-
-        except Exception as error:
-
-            last_error = error
-
-            if attempt < retries - 1:
-                time.sleep(2 ** attempt)
-
-    raise RuntimeError(str(last_error))
+    return content.strip()
 
 
-def run_stage(stage, ctx, previous, api_key, model):
+# =========================================================
+# Tutor Agent
+# =========================================================
 
-    if stage not in STAGE_CONFIG:
-        return {
-            "ok": False,
-            "error": f"Unknown pipeline stage: {stage}",
-            "key": ""
-        }
-
-    cfg = STAGE_CONFIG[stage]
-
-    prompt = f"""
-CONTENT BRIEF
-
-Topic:
-{ctx.get('topic', '')}
-
-Keywords:
-{ctx.get('keywords', '')}
-
-Tone:
-{ctx.get('tone', '')}
-
-Language:
-{ctx.get('language', '')}
-
-Target Audience:
-{ctx.get('audience', '')}
-
-Target Length:
-{ctx.get('length', '')}
-
-Additional Instructions:
-{ctx.get('extra', '')}
-
-
-PREVIOUS STAGE OUTPUT
-
-{previous or 'No previous stage output.'}
-
-
-CURRENT TASK
-
-{cfg['task']}
-
-
-CONTENT RULES
-
-- Be useful, original and reader-focused.
-- Follow the requested language and tone.
-- Do not invent facts, statistics, sources or quotations.
-- If information is uncertain, avoid presenting it as fact.
-- Avoid unnecessary repetition and filler.
-- Use natural sentence variation.
-- Use keywords naturally rather than stuffing them.
-- Do not promise AI-detector bypass or guaranteed human detection results.
-- Do not imitate a living writer.
-"""
-
-    try:
-
-        client = _client(api_key)
-
-        text = _call(
-            client=client,
-            model=model,
-            system=cfg["system"],
-            prompt=prompt
-        )
-
-        return {
-            "ok": True,
-            "content": text,
-            "key": cfg["key"]
-        }
-
-    except Exception as error:
-
-        error_id = uuid.uuid4().hex[:8].upper()
-
-        return {
-            "ok": False,
-            "error": (
-                f"Error ID "
-                f"{stage[:8].upper()}-{error_id}: "
-                f"{error}"
-            ),
-            "key": cfg["key"]
-        }
-        
-def run_paragraph_rewrite(
-    paragraph,
-    style,
-    preserve_meaning,
-    improve_readability,
-    remove_repetition,
-    additional_instructions,
-    api_key,
-    model
-):
+def tutor_agent(
+    client,
+    model: str,
+    request_data: dict,
+) -> str:
     """
-    Rewrite a single paragraph using Groq.
+    Tutor Agent creates the initial educational explanation.
     """
+
+    question = request_data["question"]
+    academic_level = request_data["academic_level"]
+    subject = request_data["subject"]
+    language = request_data["language"]
+    explanation_style = request_data["explanation_style"]
 
     system_prompt = """
-You are an expert professional content editor.
+You are the Tutor Agent in an AI Education platform.
 
-Rewrite the user's paragraph so it is natural,
-clear, readable, and well structured.
+Your job is to teach, not simply provide a short answer.
+
+Adapt your explanation to the student's academic level.
 
 Important rules:
-- Preserve the original meaning.
-- Do not invent facts.
-- Do not add unsupported statistics.
-- Do not add fake citations.
-- Do not add unrelated information.
-- Remove unnecessary repetition and filler.
-- Improve sentence flow and readability.
-- Do not imitate a living writer.
-- Do not promise AI-detector bypass.
-- Return ONLY the rewritten paragraph.
+
+1. Explain concepts clearly.
+2. Use examples when useful.
+3. Break difficult concepts into smaller parts.
+4. Do not invent facts.
+5. If you are uncertain, clearly say so.
+6. For mathematical problems, show the reasoning and steps.
+7. For science questions, explain concepts logically.
+8. For academic questions, distinguish facts from assumptions.
+9. Never claim that an unsupported statement is a verified fact.
+10. Follow the requested language and explanation style.
 """
 
     user_prompt = f"""
-ORIGINAL PARAGRAPH:
+Student Academic Level:
+{academic_level}
 
-{paragraph}
+Subject:
+{subject}
 
+Language:
+{language}
 
-REWRITE STYLE:
+Explanation Style:
+{explanation_style}
 
-{style}
+Student Question:
+{question}
 
-
-PRESERVE ORIGINAL MEANING:
-
-{preserve_meaning}
-
-
-IMPROVE READABILITY:
-
-{improve_readability}
-
-
-REMOVE REPETITION AND FILLER:
-
-{remove_repetition}
-
-
-ADDITIONAL INSTRUCTIONS:
-
-{additional_instructions or "None"}
-
-
-Rewrite the paragraph now.
-
-Return ONLY the final rewritten paragraph.
-Do not explain your changes.
+Provide a useful educational explanation.
 """
 
-    try:
+    return call_groq(
+        client=client,
+        model=model,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
 
-        client = _client(api_key)
 
-        content = _call(
-            client=client,
-            model=model,
-            system=system_prompt,
-            prompt=user_prompt,
-            retries=3
-        )
+# =========================================================
+# Research Agent
+# =========================================================
 
-        if not content or not content.strip():
-            raise RuntimeError(
-                "Groq returned an empty response."
-            )
+def research_agent(
+    client,
+    model: str,
+    request_data: dict,
+    tutor_answer: str,
+) -> str:
+    """
+    Research Agent checks the answer for factual quality.
 
-        return {
-            "ok": True,
-            "content": content.strip()
-        }
+    This is the foundation for the future RAG layer.
+    """
 
-    except Exception as error:
+    question = request_data["question"]
+    subject = request_data["subject"]
 
-        error_id = uuid.uuid4().hex[:8].upper()
+    system_prompt = """
+You are the Research Agent for an AI education system.
 
-        return {
-            "ok": False,
-            "error": (
-                f"PARAGRAPH-REWRITE-{error_id}: "
-                f"{str(error)}"
-            )
-        }
+Your task is to analyze the proposed tutor answer.
+
+Check:
+
+- factual consistency
+- logical consistency
+- missing important information
+- unsupported claims
+- possible misconceptions
+- whether the answer matches the question
+
+Do not unnecessarily rewrite the entire answer.
+
+Return concise research feedback that another agent can use.
+"""
+
+    user_prompt = f"""
+Subject:
+{subject}
+
+Question:
+{question}
+
+Proposed Tutor Answer:
+{tutor_answer}
+
+Analyze the answer and identify corrections or improvements.
+"""
+
+    return call_groq(
+        client=client,
+        model=model,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
+
+
+# =========================================================
+# Evaluator Agent
+# =========================================================
+
+def evaluator_agent(
+    client,
+    model: str,
+    request_data: dict,
+    tutor_answer: str,
+    research_feedback: str,
+) -> str:
+    """
+    Evaluator Agent produces the final student-friendly answer.
+    """
+
+    system_prompt = """
+You are the Final Evaluator Agent in an AI Education platform.
+
+Your job is to produce the final answer for the student.
+
+Use the tutor answer and research feedback.
+
+Requirements:
+
+1. Correct factual problems identified by the Research Agent.
+2. Do not add unsupported information.
+3. Keep the answer appropriate for the student's academic level.
+4. Make the explanation easy to understand.
+5. Use headings and bullet points where useful.
+6. Show steps for problems that require steps.
+7. Include examples where useful.
+8. Do not mention internal agents.
+9. Do not mention this evaluation process.
+10. Answer directly.
+"""
+
+    user_prompt = f"""
+Academic Level:
+{request_data["academic_level"]}
+
+Subject:
+{request_data["subject"]}
+
+Language:
+{request_data["language"]}
+
+Explanation Style:
+{request_data["explanation_style"]}
+
+Student Question:
+{request_data["question"]}
+
+Tutor Answer:
+{tutor_answer}
+
+Research Feedback:
+{research_feedback}
+
+Produce the final answer for the student.
+"""
+
+    return call_groq(
+        client=client,
+        model=model,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+    )
+
+
+# =========================================================
+# Multi-Agent Orchestrator
+# =========================================================
+
+def run_ai_tutor(
+    request_data: dict,
+    api_key: str,
+    model: str,
+) -> str:
+    """
+    Run the complete multi-agent AI Tutor workflow.
+
+    Workflow:
+
+    User Question
+          ↓
+    Tutor Agent
+          ↓
+    Research Agent
+          ↓
+    Evaluator Agent
+          ↓
+    Final Answer
+    """
+
+    if not request_data.get("question", "").strip():
+        raise ValueError("Question cannot be empty.")
+
+    if not api_key:
+        raise ValueError("GROQ_API_KEY is not configured.")
+
+    if not model:
+        raise ValueError("AI model is not configured.")
+
+    client = create_client(api_key)
+
+    # Agent 1
+    tutor_answer = tutor_agent(
+        client=client,
+        model=model,
+        request_data=request_data,
+    )
+
+    # Agent 2
+    research_feedback = research_agent(
+        client=client,
+        model=model,
+        request_data=request_data,
+        tutor_answer=tutor_answer,
+    )
+
+    # Agent 3
+    final_answer = evaluator_agent(
+        client=client,
+        model=model,
+        request_data=request_data,
+        tutor_answer=tutor_answer,
+        research_feedback=research_feedback,
+    )
+
+    return final_answer
